@@ -1,0 +1,50 @@
+[package]
+name = "sidespot-native"
+version = "0.1.0"
+edition = "2021"
+description = "Native Rust library for sidespot - librespot JNI bridge"
+
+[lib]
+name = "sidespot"
+crate-type = ["cdylib"]
+
+[dependencies]
+# JNI bindings
+jni = { version = "0.21", features = ["invocation"] }
+
+# librespot crates from git dev branch (0.8.0 crates.io has vergen conflict)
+# Use rustls instead of native-tls to avoid OpenSSL cross-compilation issues on Android.
+# default-features = false on all crates to prevent native-tls from leaking in transitively.
+librespot-core = { path = "librespot-local/core", default-features = false, features = ["rustls-tls-webpki-roots"] }
+librespot-metadata = { path = "librespot-local/metadata", default-features = false, features = ["rustls-tls-webpki-roots"] }
+librespot-playback = { path = "librespot-local/playback", default-features = false, features = ["rustls-tls-webpki-roots"] }
+librespot-oauth = { path = "librespot-local/oauth", default-features = false, features = ["rustls-tls-webpki-roots"] }
+librespot-protocol = { path = "librespot-local/protocol", default-features = false }
+librespot-connect = { path = "librespot-local/connect", default-features = false, features = ["rustls-tls-webpki-roots"] }
+
+# Protobuf (for parsing raw SpClient responses)
+protobuf = "3.7"
+
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
+
+# Serialization for JNI payloads
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+log = "0.4"
+android_logger = "0.14"
+
+# Error handling
+thiserror = "2"
+
+# Byte conversion (used by audio sink for PCM sample conversion)
+zerocopy = { version = "0.8", features = ["derive"] }
+
+[profile.release]
+opt-level = "s"       # Optimize for size
+lto = true            # Link-time optimization
+strip = true          # Strip debug symbols
+codegen-units = 1     # Better optimization, slower compile
+panic = "abort"       # Smaller binary, no unwinding
