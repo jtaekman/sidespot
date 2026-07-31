@@ -75,6 +75,26 @@ To track updates automatically via [Obtainium](https://github.com/ImranR98/Obtai
 2. Add app -> enter the repository URL: `https://github.com/jtaekman/sidespot`
 3. Obtainium will check for new releases and notify you when updates are available
 
+#### Switching from the Codeberg source
+
+Sidespot used to be hosted on Codeberg. That repository is deprecated and will
+not publish new releases, so if you added Sidespot to Obtainium before the move,
+you need to re-point it at GitHub — otherwise updates will silently stop.
+
+Obtainium keys each app to the source URL it was added with, so this is a
+remove-and-re-add rather than an in-place edit:
+
+1. Open Obtainium and select **Sidespot** (source: `codeberg.org/jtaekman/sidespot`)
+2. Remove it from your app list. This only stops Obtainium tracking it -- it does
+   **not** uninstall Sidespot from your device
+3. Add app -> enter the new URL: `https://github.com/jtaekman/sidespot`
+4. Obtainium will pick up the copy already installed on your device and notify you
+   on the next release
+
+You do not need to uninstall or reinstall anything. GitHub releases are signed
+with the same key as the Codeberg ones, so future updates install straight over
+your existing app and your login and settings are preserved.
+
 ## Build from Source
 
 ### Prerequisites
