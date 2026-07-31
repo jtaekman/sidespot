@@ -104,10 +104,12 @@ data class PlaylistSummary(
 @Serializable
 data class SearchResults(
     val tracks: List<TrackInfo> = emptyList(),
+    val artists: List<SearchArtistResult> = emptyList(),
     val albums: List<SearchAlbumResult> = emptyList(),
     val playlists: List<SearchPlaylistResult> = emptyList(),
     val shows: List<SearchShowResult> = emptyList(),
     @SerialName("total_tracks") val totalTracks: Int = 0,
+    @SerialName("total_artists") val totalArtists: Int = 0,
     @SerialName("total_albums") val totalAlbums: Int = 0,
     @SerialName("total_playlists") val totalPlaylists: Int = 0,
     @SerialName("total_shows") val totalShows: Int = 0,
@@ -150,12 +152,6 @@ data class SearchShowResult(
     val name: String,
     val publisher: String,
     @SerialName("image_url") val imageUrl: String? = null,
-)
-
-@Serializable
-data class SearchPageResult<T>(
-    val items: List<T>,
-    val total: Int,
 )
 
 @Serializable

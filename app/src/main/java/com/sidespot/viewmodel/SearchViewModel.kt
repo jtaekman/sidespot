@@ -2,13 +2,12 @@ package com.sidespot.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.sidespot.api.SpotifyWebApi
-import com.sidespot.auth.AuthManager
 import com.sidespot.bridge.NativeBridge
 import com.sidespot.bridge.SearchAlbumResult
 import com.sidespot.bridge.SearchArtistResult
 import com.sidespot.bridge.SearchPlaylistResult
 import com.sidespot.bridge.SearchResults
+import com.sidespot.bridge.SearchShowResult
 import com.sidespot.bridge.ShowSummary
 import com.sidespot.bridge.TrackInfo
 import kotlinx.coroutines.Dispatchers
@@ -19,6 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 data class ArtistResult(
@@ -64,7 +64,12 @@ data class SearchUiState(
     val error: String? = null,
 )
 
+/** Rows revealed per section, and per tap of "Show More". */
 private const val SEARCH_PAGE_SIZE = 5
+
+/** Rows fetched per request; two taps of "Show More" before another round trip. */
+private const val SEARCH_FETCH_LIMIT = 10
+
 private const val SEARCH_TIMEOUT_MS = 15_000L
 
 private const val TYPE_TRACK = "track"
@@ -73,22 +78,15 @@ private const val TYPE_ALBUM = "album"
 private const val TYPE_PLAYLIST = "playlist"
 private const val TYPE_SHOW = "show"
 
-private val ALL_TYPES = listOf(TYPE_TRACK, TYPE_ARTIST, TYPE_ALBUM, TYPE_PLAYLIST, TYPE_SHOW)
-
 class SearchViewModel : ViewModel() {
 
     private val _uiState = MutableStateFlow(SearchUiState())
     val uiState: StateFlow<SearchUiState> = _uiState.asStateFlow()
 
-    private var api: SpotifyWebApi? = null
     private var searchJob: Job? = null
 
-    /** Catalogue totals per search type, so we know when to fetch another page. */
+    /** Catalogue totals per section, so we know when to fetch another page. */
     private val totals = mutableMapOf<String, Int>()
-
-    fun initApi(authManager: AuthManager) {
-        if (api == null) api = SpotifyWebApi(authManager)
-    }
 
     fun updateQuery(query: String) {
         _uiState.update { it.copy(query = query) }
@@ -130,13 +128,10 @@ class SearchViewModel : ViewModel() {
     private suspend fun performSearch(query: String) {
         _uiState.update { it.copy(isSearching = true, error = null) }
 
-        val api = this.api
-        val page = if (api == null) null else withTimeoutOrNull(SEARCH_TIMEOUT_MS) {
-            api.search(query, ALL_TYPES)
-        }
+        val page = withTimeoutOrNull(SEARCH_TIMEOUT_MS) { fetchPage(query, offset = 0) }
 
         if (page == null) {
-            fallbackNativeSearch(query)
+            _uiState.update { it.copy(isSearching = false, error = "Search failed") }
             return
         }
 
@@ -144,7 +139,7 @@ class SearchViewModel : ViewModel() {
         val artists = page.artists.map { it.toUiModel() }
         val albums = page.albums.map { it.toUiModel() }
         val playlists = page.playlists.map { it.toUiModel() }
-        val shows = page.shows
+        val shows = page.shows.map { it.toUiModel() }
 
         totals[TYPE_TRACK] = page.totalTracks
         totals[TYPE_ARTIST] = page.totalArtists
@@ -175,48 +170,19 @@ class SearchViewModel : ViewModel() {
         }
     }
 
-    /**
-     * Last resort when the Web API is unreachable: the native session can still
-     * resolve a search context, but it only yields tracks.
-     */
-    private fun fallbackNativeSearch(query: String) {
-        val json = NativeBridge.metadataSearch(query)
-        val results = if (json == null || json.startsWith("{\"error\"")) {
-            null
-        } else {
-            SearchResults.fromJson(json)
+    /** One page of every section, straight from the native search. */
+    private suspend fun fetchPage(query: String, offset: Int): SearchResults? =
+        withContext(Dispatchers.IO) {
+            val json = NativeBridge.metadataSearch(query, SEARCH_FETCH_LIMIT, offset)
+            if (json == null || json.startsWith("{\"error\"")) null else SearchResults.fromJson(json)
         }
-
-        if (results == null || results.tracks.isEmpty()) {
-            _uiState.update { it.copy(isSearching = false, error = "Search failed") }
-            return
-        }
-
-        totals[TYPE_TRACK] = results.tracks.size
-        _uiState.update {
-            it.copy(
-                isSearching = false,
-                tracks = results.tracks,
-                trackUris = results.tracks.map { t -> t.uri },
-                artists = emptyList(),
-                albums = emptyList(),
-                shows = emptyList(),
-                playlists = emptyList(),
-                tracksDisplayLimit = SEARCH_PAGE_SIZE,
-                hasMoreTracks = results.tracks.size > SEARCH_PAGE_SIZE,
-                hasMoreArtists = false,
-                hasMoreAlbums = false,
-                hasMoreShows = false,
-                hasMorePlaylists = false,
-            )
-        }
-    }
 
     fun showMoreTracks() = showMore(
         type = TYPE_TRACK,
         loaded = { tracks },
         displayLimit = { tracksDisplayLimit },
         extract = { it.tracks },
+        key = { it.uri },
     ) { items, limit, more ->
         copy(
             tracks = items,
@@ -231,6 +197,7 @@ class SearchViewModel : ViewModel() {
         loaded = { artists },
         displayLimit = { artistsDisplayLimit },
         extract = { page -> page.artists.map { it.toUiModel() } },
+        key = { it.uri },
     ) { items, limit, more ->
         copy(artists = items, artistsDisplayLimit = limit, hasMoreArtists = more)
     }
@@ -240,6 +207,7 @@ class SearchViewModel : ViewModel() {
         loaded = { albums },
         displayLimit = { albumsDisplayLimit },
         extract = { page -> page.albums.map { it.toUiModel() } },
+        key = { it.uri },
     ) { items, limit, more ->
         copy(albums = items, albumsDisplayLimit = limit, hasMoreAlbums = more)
     }
@@ -249,6 +217,7 @@ class SearchViewModel : ViewModel() {
         loaded = { playlists },
         displayLimit = { playlistsDisplayLimit },
         extract = { page -> page.playlists.map { it.toUiModel() } },
+        key = { it.uri },
     ) { items, limit, more ->
         copy(playlists = items, playlistsDisplayLimit = limit, hasMorePlaylists = more)
     }
@@ -257,7 +226,8 @@ class SearchViewModel : ViewModel() {
         type = TYPE_SHOW,
         loaded = { shows },
         displayLimit = { showsDisplayLimit },
-        extract = { it.shows },
+        extract = { page -> page.shows.map { it.toUiModel() } },
+        key = { it.uri },
     ) { items, limit, more ->
         copy(shows = items, showsDisplayLimit = limit, hasMoreShows = more)
     }
@@ -270,7 +240,8 @@ class SearchViewModel : ViewModel() {
         type: String,
         loaded: SearchUiState.() -> List<T>,
         displayLimit: SearchUiState.() -> Int,
-        extract: (SpotifyWebApi.SearchResponse) -> List<T>,
+        extract: (SearchResults) -> List<T>,
+        key: (T) -> String,
         apply: SearchUiState.(items: List<T>, limit: Int, hasMore: Boolean) -> SearchUiState,
     ) {
         val state = _uiState.value
@@ -284,13 +255,15 @@ class SearchViewModel : ViewModel() {
 
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isLoadingMore = true) }
-            val page = api?.search(state.query, listOf(type), offset = items.size)
+            val page = fetchPage(state.query, offset = items.size)
             if (page == null) {
                 _uiState.update { it.copy(isLoadingMore = false) }
                 return@launch
             }
             totals[type] = totalFor(type, page)
-            val all = items + extract(page)
+            // Pages can overlap; duplicate keys would crash the lazy list.
+            val seen = items.mapTo(mutableSetOf(), key)
+            val all = items + extract(page).filter { seen.add(key(it)) }
             _uiState.update {
                 it.apply(all, newLimit, hasMore(newLimit, all.size, type)).copy(isLoadingMore = false)
             }
@@ -300,7 +273,7 @@ class SearchViewModel : ViewModel() {
     private fun hasMore(displayLimit: Int, loaded: Int, type: String): Boolean =
         displayLimit < loaded || loaded < (totals[type] ?: 0)
 
-    private fun totalFor(type: String, page: SpotifyWebApi.SearchResponse): Int = when (type) {
+    private fun totalFor(type: String, page: SearchResults): Int = when (type) {
         TYPE_TRACK -> page.totalTracks
         TYPE_ARTIST -> page.totalArtists
         TYPE_ALBUM -> page.totalAlbums
@@ -327,5 +300,12 @@ private fun SearchPlaylistResult.toUiModel() = PlaylistResult(
     uri = uri,
     name = name,
     ownerName = ownerName,
+    imageUrl = imageUrl,
+)
+
+private fun SearchShowResult.toUiModel() = ShowSummary(
+    uri = uri,
+    name = name,
+    publisher = publisher,
     imageUrl = imageUrl,
 )

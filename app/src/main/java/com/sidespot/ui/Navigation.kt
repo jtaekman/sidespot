@@ -211,7 +211,6 @@ fun SidespotNavigation(
     val context = LocalContext.current
     LaunchedEffect(Unit) {
         libraryViewModel.initHistory(context)
-        searchViewModel.initApi(authManager)
     }
 
     // Navigate from login to library once connected, and load library data

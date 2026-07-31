@@ -410,15 +410,17 @@ pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_metadataGetLikedSongs(
     }
 }
 
-/// Search Spotify. Returns JSON search results with track URIs.
+/// Search Spotify. Returns one page of JSON results for every entity type.
 #[unsafe(no_mangle)]
 pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_metadataSearch(
     mut env: JNIEnv,
     _class: JClass,
     query: JString,
+    limit: jint,
+    offset: jint,
 ) -> jstring {
     let q = jstring_to_string(&mut env, &query);
-    match block_on(metadata::search(&q)) {
+    match block_on(metadata::search(&q, limit, offset)) {
         Ok(json) => string_to_jstring(&mut env, &json),
         Err(e) => {
             let msg = format!("{{\"error\":\"{e}\"}}");

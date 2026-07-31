@@ -93,11 +93,49 @@ pub struct PlaylistSummary {
     pub is_writable: bool,
 }
 
-/// Tracks-only search payload; the app fills the other sections from the Web API.
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchArtistResult {
+    pub uri: String,
+    pub name: String,
+    pub image_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchAlbumResult {
+    pub uri: String,
+    pub name: String,
+    pub artist_name: String,
+    pub album_art_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchPlaylistResult {
+    pub uri: String,
+    pub name: String,
+    pub owner_name: String,
+    pub image_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchShowResult {
+    pub uri: String,
+    pub name: String,
+    pub publisher: String,
+    pub image_url: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct SearchResults {
     pub tracks: Vec<TrackInfo>,
+    pub artists: Vec<SearchArtistResult>,
+    pub albums: Vec<SearchAlbumResult>,
+    pub playlists: Vec<SearchPlaylistResult>,
+    pub shows: Vec<SearchShowResult>,
     pub total_tracks: i32,
+    pub total_artists: i32,
+    pub total_albums: i32,
+    pub total_playlists: i32,
+    pub total_shows: i32,
 }
 
 // ---------------------------------------------------------------------------
@@ -615,15 +653,319 @@ pub async fn get_autoplay_tracks(context_uri: &str, recent_track_uris: &[String]
     Ok(serde_json::to_string(&track_uris)?)
 }
 
-/// Search Spotify by resolving a `spotify:search:` context.
+// ---------------------------------------------------------------------------
+// Search
+// ---------------------------------------------------------------------------
+
+/// Pathfinder is the GraphQL gateway the first-party clients search through.
+/// It accepts our session token, unlike the Web API, so it works for every
+/// signed-in user rather than only those on a developer-dashboard allowlist.
+const PATHFINDER_HOST: &str = "https://api-partner.spotify.com";
+
+/// Pathfinder only serves *persisted* queries — an inline query string is
+/// rejected outright — so we address the web client's `searchDesktop`
+/// operation by hash.  Spotify rotates these when the web player ships, and a
+/// stale hash comes back as 400; [`search`] then falls back to the context
+/// search until this constant is refreshed.
+const SEARCH_QUERY_HASH: &str = "d9f785900f0710b31c07818d617f4f7600c1e21217e80f5b043d1e78d74e6026";
+
+/// Smallest image we consider big enough for a search row.
+const IMAGE_MIN_WIDTH: i64 = 200;
+
+/// Percent-encode a query-string value.
+fn percent_encode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() * 2);
+    for b in input.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => {
+                out.push('%');
+                out.push(char::from(b"0123456789ABCDEF"[(b >> 4) as usize]));
+                out.push(char::from(b"0123456789ABCDEF"[(b & 0x0F) as usize]));
+            }
+        }
+    }
+    out
+}
+
+/// Run `searchDesktop` against pathfinder and return the decoded response.
+async fn pathfinder_search(
+    session: &Session,
+    query: &str,
+    limit: i32,
+    offset: i32,
+) -> Result<serde_json::Value> {
+    use hyper::header::{ACCEPT, HeaderMap, HeaderValue};
+    use librespot_core::spclient::RequestOptions;
+
+    let variables = serde_json::json!({
+        "searchTerm": query,
+        "offset": offset,
+        "limit": limit,
+        "numberOfTopResults": 5,
+        "includeAudiobooks": false,
+    });
+    let extensions = serde_json::json!({
+        "persistedQuery": { "version": 1, "sha256Hash": SEARCH_QUERY_HASH },
+    });
+    let endpoint = format!(
+        "/pathfinder/v1/query?operationName=searchDesktop&variables={}&extensions={}",
+        percent_encode(&variables.to_string()),
+        percent_encode(&extensions.to_string()),
+    );
+
+    let mut headers = HeaderMap::new();
+    headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+    headers.insert("app-platform", HeaderValue::from_static("WebPlayer"));
+
+    // `metrics` and `salt` would append params of their own; pathfinder wants
+    // the query string exactly as built above.
+    let options = RequestOptions {
+        metrics: false,
+        salt: false,
+        base_url: Some(PATHFINDER_HOST),
+    };
+
+    let body = session
+        .spclient()
+        .request_with_options(&Method::GET, &endpoint, Some(headers), None, &options)
+        .await
+        .map_err(|e| SidespotError::Player(format!("pathfinder request failed: {e}")))?;
+
+    let val: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|e| SidespotError::Player(format!("failed to parse pathfinder response: {e}")))?;
+
+    // GraphQL reports trouble in-band: a rotated hash comes back as HTTP 200
+    // carrying `errors` and no data, which must not read as "no results".
+    if let Some(errors) = val.get("errors") {
+        return Err(SidespotError::Player(format!("pathfinder error: {errors}")));
+    }
+    if val.pointer("/data/searchV2").is_none() {
+        return Err(SidespotError::Player("pathfinder returned no searchV2 data".into()));
+    }
+
+    Ok(val)
+}
+
+/// Pick a list-row-sized image out of a pathfinder `sources` array.
+fn pf_image(node: Option<&serde_json::Value>) -> Option<String> {
+    let sources = node?.as_array()?;
+    let mut smallest_usable: Option<(i64, &str)> = None;
+    let mut largest: Option<(i64, &str)> = None;
+    let mut any: Option<&str> = None;
+
+    for source in sources {
+        let Some(url) = source.get("url").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        any.get_or_insert(url);
+        let Some(width) = source.get("width").and_then(|v| v.as_i64()) else {
+            continue;
+        };
+        if width >= IMAGE_MIN_WIDTH && smallest_usable.is_none_or(|(w, _)| width < w) {
+            smallest_usable = Some((width, url));
+        }
+        if largest.is_none_or(|(w, _)| width > w) {
+            largest = Some((width, url));
+        }
+    }
+
+    smallest_usable
+        .or(largest)
+        .map(|(_, url)| url)
+        .or(any)
+        .map(str::to_string)
+}
+
+fn pf_str(node: &serde_json::Value, pointer: &str) -> String {
+    node.pointer(pointer)
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Items and `totalCount` of one `searchV2` section.
+fn pf_section<'a>(
+    root: &'a serde_json::Value,
+    name: &str,
+) -> (&'a [serde_json::Value], i32) {
+    let Some(section) = root.pointer(&format!("/data/searchV2/{name}")) else {
+        return (&[], 0);
+    };
+    let total = section
+        .get("totalCount")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as i32;
+    let items = section
+        .get("items")
+        .and_then(|v| v.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    (items, total)
+}
+
+/// Artist credits attached to a track or album.
+fn pf_artists(data: &serde_json::Value) -> Vec<ArtistSummary> {
+    data.pointer("/artists/items")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .map(|a| ArtistSummary {
+                    uri: pf_str(a, "/uri"),
+                    name: pf_str(a, "/profile/name"),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_pf_tracks(root: &serde_json::Value) -> (Vec<TrackInfo>, i32) {
+    let (items, total) = pf_section(root, "tracksV2");
+    let tracks = items
+        .iter()
+        .filter_map(|item| {
+            let data = item.pointer("/item/data")?;
+            let uri = data.get("uri")?.as_str()?.to_string();
+            Some(TrackInfo {
+                uri,
+                name: pf_str(data, "/name"),
+                artists: pf_artists(data),
+                album_name: pf_str(data, "/albumOfTrack/name"),
+                album_uri: pf_str(data, "/albumOfTrack/uri"),
+                album_art_url: pf_image(data.pointer("/albumOfTrack/coverArt/sources")),
+                duration_ms: data
+                    .pointer("/duration/totalMilliseconds")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0) as i32,
+                // Search hits carry no position within the album.
+                track_number: 0,
+                disc_number: 0,
+                is_explicit: pf_str(data, "/contentRating/label") == "EXPLICIT",
+            })
+        })
+        .collect();
+    (tracks, total)
+}
+
+fn parse_pf_artists(root: &serde_json::Value) -> (Vec<SearchArtistResult>, i32) {
+    let (items, total) = pf_section(root, "artists");
+    let artists = items
+        .iter()
+        .filter_map(|item| {
+            let data = item.get("data")?;
+            Some(SearchArtistResult {
+                uri: data.get("uri")?.as_str()?.to_string(),
+                name: pf_str(data, "/profile/name"),
+                image_url: pf_image(data.pointer("/visuals/avatarImage/sources")),
+            })
+        })
+        .collect();
+    (artists, total)
+}
+
+fn parse_pf_albums(root: &serde_json::Value) -> (Vec<SearchAlbumResult>, i32) {
+    let (items, total) = pf_section(root, "albumsV2");
+    let albums = items
+        .iter()
+        .filter_map(|item| {
+            // The section can also carry pre-releases, which have no album data.
+            let data = item.get("data")?;
+            Some(SearchAlbumResult {
+                uri: data.get("uri")?.as_str()?.to_string(),
+                name: pf_str(data, "/name"),
+                artist_name: pf_artists(data)
+                    .iter()
+                    .map(|a| a.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                album_art_url: pf_image(data.pointer("/coverArt/sources")),
+            })
+        })
+        .collect();
+    (albums, total)
+}
+
+fn parse_pf_playlists(root: &serde_json::Value) -> (Vec<SearchPlaylistResult>, i32) {
+    let (items, total) = pf_section(root, "playlists");
+    let playlists = items
+        .iter()
+        .filter_map(|item| {
+            let data = item.get("data")?;
+            Some(SearchPlaylistResult {
+                uri: data.get("uri")?.as_str()?.to_string(),
+                name: pf_str(data, "/name"),
+                owner_name: pf_str(data, "/ownerV2/data/name"),
+                image_url: pf_image(data.pointer("/images/items/0/sources")),
+            })
+        })
+        .collect();
+    (playlists, total)
+}
+
+fn parse_pf_shows(root: &serde_json::Value) -> (Vec<SearchShowResult>, i32) {
+    let (items, total) = pf_section(root, "podcasts");
+    let shows = items
+        .iter()
+        .filter_map(|item| {
+            let data = item.get("data")?;
+            Some(SearchShowResult {
+                uri: data.get("uri")?.as_str()?.to_string(),
+                name: pf_str(data, "/name"),
+                publisher: pf_str(data, "/publisher/name"),
+                image_url: pf_image(data.pointer("/coverArt/sources")),
+            })
+        })
+        .collect();
+    (shows, total)
+}
+
+/// Search Spotify's catalogue for one page of every entity type.
 ///
-/// This is the offline-ish fallback the app uses when the Web API is
-/// unreachable: the context only carries track URIs, so albums, artists,
-/// playlists and shows come back empty.  (Spotify's internal `searchview`
-/// endpoint used to serve all of those in one call, but it now rejects every
-/// request from this client.)
-pub async fn search(query: &str) -> Result<String> {
+/// Goes through pathfinder, which authenticates with the session token and so
+/// works for any signed-in user.  If that fails — most likely a rotated
+/// [`SEARCH_QUERY_HASH`] — falls back to resolving a `spotify:search:` context,
+/// which only yields tracks.
+pub async fn search(query: &str, limit: i32, offset: i32) -> Result<String> {
     let session = session::get_session().await?;
+
+    match pathfinder_search(&session, query, limit, offset).await {
+        Ok(val) => {
+            let (tracks, total_tracks) = parse_pf_tracks(&val);
+            let (artists, total_artists) = parse_pf_artists(&val);
+            let (albums, total_albums) = parse_pf_albums(&val);
+            let (playlists, total_playlists) = parse_pf_playlists(&val);
+            let (shows, total_shows) = parse_pf_shows(&val);
+
+            let results = SearchResults {
+                tracks,
+                artists,
+                albums,
+                playlists,
+                shows,
+                total_tracks,
+                total_artists,
+                total_albums,
+                total_playlists,
+                total_shows,
+            };
+            Ok(serde_json::to_string(&results)?)
+        }
+        Err(e) => {
+            log::warn!("Pathfinder search failed, falling back to context search: {e}");
+            // The fallback can only serve the first page; paging past it would
+            // repeat the same tracks under keys the UI has already used.
+            if offset > 0 {
+                return Ok(serde_json::to_string(&SearchResults::default())?);
+            }
+            context_search(&session, query).await
+        }
+    }
+}
+
+/// Search by resolving a `spotify:search:` context.  The context carries track
+/// URIs only, so every other section comes back empty.
+async fn context_search(session: &Session, query: &str) -> Result<String> {
     let encoded_query = query.replace(' ', "+");
     let context_uri = format!("spotify:search:{encoded_query}");
 
