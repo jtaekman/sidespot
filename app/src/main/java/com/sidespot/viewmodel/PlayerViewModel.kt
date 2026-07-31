@@ -173,9 +173,13 @@ class PlayerViewModel : ViewModel() {
                 it.copy(
                     isLoading = true,
                     trackUri = uri,
-                    trackTitle = cached?.name ?: "",
-                    artistName = cached?.artistName ?: "",
-                    albumName = cached?.albumName ?: "",
+                    // Carry the previous track's display metadata (like art/duration
+                    // already do) when the new track isn't cached yet, so the
+                    // mini-player stays mounted while metadata is fetched instead of
+                    // blanking out and collapsing the bottom bar.
+                    trackTitle = cached?.name ?: it.trackTitle,
+                    artistName = cached?.artistName ?: it.artistName,
+                    albumName = cached?.albumName ?: it.albumName,
                     albumArtUrl = cached?.albumArtUrl ?: it.albumArtUrl,
                     durationMs = cached?.durationMs?.toLong() ?: it.durationMs,
                     error = null,
@@ -563,8 +567,20 @@ class PlayerViewModel : ViewModel() {
     }
 
     private suspend fun fetchAndApplyMetadata(uri: String) {
-        val json = NativeBridge.metadataGetTrack(uri) ?: return
-        val trackInfo = TrackInfo.fromJson(json) ?: return
+        val trackInfo = NativeBridge.metadataGetTrack(uri)?.let { TrackInfo.fromJson(it) }
+        if (trackInfo == null) {
+            // Metadata unavailable — drop the placeholder carried over by loadTrack
+            // rather than leaving the previous track's title on screen.
+            _uiState.update {
+                if (it.trackUri != uri) it
+                else it.copy(trackTitle = "", artistName = "", albumName = "")
+            }
+            return
+        }
+        queueManager.cacheMetadata(uri, trackInfo)
+        // A late response for a track the user already skipped past must not
+        // overwrite the current track's metadata.
+        if (_uiState.value.trackUri != uri) return
         _uiState.update {
             it.copy(
                 trackTitle = trackInfo.name,
@@ -574,7 +590,6 @@ class PlayerViewModel : ViewModel() {
                 durationMs = trackInfo.durationMs.toLong(),
             )
         }
-        queueManager.cacheMetadata(uri, trackInfo)
         updatePlaybackService()
     }
 

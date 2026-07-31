@@ -252,8 +252,10 @@ fun SidespotNavigation(
             bottomBar = {
                 if (!hideChrome) {
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        // Mini-player above bottom nav
-                        if (state.isConnected && state.trackUri.isNotEmpty() && state.trackTitle.isNotEmpty()) {
+                        // Mini-player above bottom nav.  Gated on trackUri only (not
+                        // trackTitle) so it stays mounted across track changes and the
+                        // theme's colour tween is visible instead of an unmount/remount.
+                        if (state.isConnected && state.trackUri.isNotEmpty()) {
                             MiniPlayer(
                                 trackTitle = state.trackTitle,
                                 artistName = state.artistName,
