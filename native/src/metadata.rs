@@ -254,6 +254,13 @@ pub async fn get_album_info(uri: &str) -> Result<String> {
     Ok(serde_json::to_string(&info)?)
 }
 
+/// Number of items requested per page when walking a truncated list.
+const LIST_PAGE_SIZE: usize = 500;
+
+/// Upper bound on pagination requests, so a server that ignores `from` can
+/// never spin us forever.
+const MAX_LIST_PAGES: usize = 100;
+
 /// Fetch playlist metadata (track URIs only, metadata fetched lazily).
 pub async fn get_playlist_info(uri: &str) -> Result<String> {
     let session = session::get_session().await?;
@@ -264,12 +271,80 @@ pub async fn get_playlist_info(uri: &str) -> Result<String> {
         .await
         .map_err(|e| SidespotError::Player(format!("failed to get playlist metadata: {e}")))?;
 
-    let track_uris: Vec<String> = playlist.tracks().map(|u| u.to_uri()).collect();
+    let mut track_uris: Vec<String> = playlist.tracks().map(|u| u.to_uri()).collect();
+    let expected = playlist.length.max(0) as usize;
+
+    // The playlist endpoint truncates long playlists; walk the remainder with
+    // explicit from/length windows.
+    if track_uris.len() < expected {
+        use librespot_protocol::playlist4_external::SelectedListContent;
+        use protobuf::Message;
+
+        let SpotifyUri::Playlist { id, .. } = &spotify_uri else {
+            return Err(SidespotError::Player(format!("not a playlist URI: {uri}")));
+        };
+        let id62 = id.to_base62();
+
+        for _ in 0..MAX_LIST_PAGES {
+            if track_uris.len() >= expected {
+                break;
+            }
+            let from = track_uris.len();
+            let endpoint =
+                format!("/playlist/v2/playlist/{id62}?from={from}&length={LIST_PAGE_SIZE}");
+
+            let response = match session
+                .spclient()
+                .request(&Method::GET, &endpoint, None, None)
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    log::warn!("playlist page from={from} failed: {e}");
+                    break;
+                }
+            };
+
+            let content = match SelectedListContent::parse_from_bytes(&response) {
+                Ok(c) => c,
+                Err(e) => {
+                    log::warn!("failed to parse playlist page from={from}: {e}");
+                    break;
+                }
+            };
+
+            // If the server ignored `from` it would replay items we already
+            // have, so only accept a page that starts where we asked.
+            let pos = content.contents.pos().max(0) as usize;
+            if pos != from {
+                log::warn!("playlist page returned pos {pos}, expected {from}; stopping");
+                break;
+            }
+
+            let before = track_uris.len();
+            for item in content.contents.items.iter() {
+                let item_uri = item.uri();
+                if !item_uri.is_empty() {
+                    track_uris.push(item_uri.to_string());
+                }
+            }
+            if track_uris.len() == before {
+                break;
+            }
+        }
+    }
+
+    if track_uris.len() < expected {
+        log::warn!(
+            "playlist {uri}: resolved {} of {expected} tracks",
+            track_uris.len()
+        );
+    }
 
     let info = PlaylistInfo {
         uri: spotify_uri.to_uri(),
         name: playlist.name().to_string(),
-        track_count: playlist.length,
+        track_count: track_uris.len() as i32,
         track_uris,
     };
 
@@ -280,54 +355,76 @@ pub async fn get_playlist_info(uri: &str) -> Result<String> {
 pub async fn get_user_playlists() -> Result<String> {
     let session = session::get_session().await?;
 
-    let response = session
-        .spclient()
-        .get_rootlist(0, None)
-        .await
-        .map_err(|e| SidespotError::Player(format!("failed to get rootlist: {e}")))?;
-
     // The rootlist returns a protobuf SelectedListContent.
     // Parse it to extract playlist URIs and names.
     use librespot_protocol::playlist4_external::SelectedListContent;
     use protobuf::Message;
 
-    let content = SelectedListContent::parse_from_bytes(&response)
-        .map_err(|e| SidespotError::Player(format!("failed to parse rootlist: {e}")))?;
-
-    let items = &content.contents.items;
-    let meta_items = &content.contents.meta_items;
-
     let username = session.username();
 
     let mut playlists = Vec::new();
-    for (i, item) in items.iter().enumerate() {
-        let uri = item.uri();
-        // Only include playlists (skip folders, etc.)
-        if uri.starts_with("spotify:playlist:") {
-            let name = meta_items
-                .get(i)
-                .and_then(|m| m.attributes.as_ref())
-                .map(|a| a.name().to_string())
-                .unwrap_or_default();
+    // The rootlist is windowed, so page until we've seen every entry. Folders
+    // count toward the total but are filtered out below.
+    let mut seen = 0usize;
+    for _ in 0..MAX_LIST_PAGES {
+        let response = session
+            .spclient()
+            .get_rootlist(seen, Some(LIST_PAGE_SIZE))
+            .await
+            .map_err(|e| SidespotError::Player(format!("failed to get rootlist: {e}")))?;
 
-            let owner = meta_items
-                .get(i)
-                .map(|m| m.owner_username().to_string())
-                .unwrap_or_default();
+        let content = SelectedListContent::parse_from_bytes(&response)
+            .map_err(|e| SidespotError::Player(format!("failed to parse rootlist: {e}")))?;
 
-            let collaborative = meta_items
-                .get(i)
-                .and_then(|m| m.attributes.as_ref())
-                .map(|a| a.collaborative())
-                .unwrap_or(false);
+        let items = &content.contents.items;
+        let meta_items = &content.contents.meta_items;
+        if items.is_empty() {
+            break;
+        }
 
-            let is_writable = owner.is_empty() || owner == username || collaborative;
+        // Guard against a server that ignores `from` and replays page one.
+        let pos = content.contents.pos().max(0) as usize;
+        if pos != seen {
+            log::warn!("rootlist page returned pos {pos}, expected {seen}; stopping");
+            if seen > 0 {
+                break;
+            }
+        }
 
-            playlists.push(PlaylistSummary {
-                uri: uri.to_string(),
-                name,
-                is_writable,
-            });
+        for (i, item) in items.iter().enumerate() {
+            let uri = item.uri();
+            // Only include playlists (skip folders, etc.)
+            if uri.starts_with("spotify:playlist:") {
+                let name = meta_items
+                    .get(i)
+                    .and_then(|m| m.attributes.as_ref())
+                    .map(|a| a.name().to_string())
+                    .unwrap_or_default();
+
+                let owner = meta_items
+                    .get(i)
+                    .map(|m| m.owner_username().to_string())
+                    .unwrap_or_default();
+
+                let collaborative = meta_items
+                    .get(i)
+                    .and_then(|m| m.attributes.as_ref())
+                    .map(|a| a.collaborative())
+                    .unwrap_or(false);
+
+                let is_writable = owner.is_empty() || owner == username || collaborative;
+
+                playlists.push(PlaylistSummary {
+                    uri: uri.to_string(),
+                    name,
+                    is_writable,
+                });
+            }
+        }
+
+        seen += items.len();
+        if seen >= content.length().max(0) as usize {
+            break;
         }
     }
 

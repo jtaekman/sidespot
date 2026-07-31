@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class TrackListUiState(
     val name: String = "",
@@ -21,16 +23,27 @@ data class TrackListUiState(
     val albumArtUrl: String? = null,
     val isAlbum: Boolean = false,
     val isLoading: Boolean = false,
+    val hasMoreTracks: Boolean = false,
     val error: String? = null,
 )
 
 class TrackListViewModel : ViewModel() {
+
+    private companion object {
+        /** Track metadata is fetched one request per track, so page it in as the user scrolls. */
+        const val PAGE_SIZE = 100
+    }
 
     private val _uiState = MutableStateFlow(TrackListUiState())
     val uiState: StateFlow<TrackListUiState> = _uiState.asStateFlow()
 
     private var loadedUri: String? = null
     private val metadataDispatcher = Dispatchers.IO.limitedParallelism(4)
+
+    /** Index into [TrackListUiState.trackUris] of the next URI to resolve. */
+    private var nextUriIndex = 0
+    private val loadedTracks = mutableListOf<TrackInfo>()
+    private val pageMutex = Mutex()
 
     fun loadTrackList(uri: String) {
         if (uri == loadedUri) return
@@ -72,11 +85,11 @@ class TrackListViewModel : ViewModel() {
             it.copy(
                 name = playlist.name,
                 trackUris = playlist.trackUris,
+                hasMoreTracks = playlist.trackUris.isNotEmpty(),
             )
         }
 
-        // Fetch track metadata concurrently (cap at 200)
-        fetchTrackMetadata(playlist.trackUris.take(200))
+        pageMutex.withLock { fetchNextPage() }
     }
 
     private suspend fun loadAlbum(uri: String) {
@@ -141,33 +154,56 @@ class TrackListViewModel : ViewModel() {
             it.copy(
                 name = "Liked Songs",
                 trackUris = playlist.trackUris,
+                hasMoreTracks = playlist.trackUris.isNotEmpty(),
             )
         }
 
-        fetchTrackMetadata(playlist.trackUris.take(200))
+        pageMutex.withLock { fetchNextPage() }
     }
 
-    private suspend fun fetchTrackMetadata(uris: List<String>) {
-        val allTracks = mutableListOf<TrackInfo>()
-        var lastEmitCount = 0
+    /**
+     * Resolve metadata for the next page of track URIs. Safe to call repeatedly:
+     * overlapping calls are dropped rather than queued.
+     */
+    fun loadMoreTracks() {
+        if (!_uiState.value.hasMoreTracks) return
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!pageMutex.tryLock()) return@launch
+            try {
+                fetchNextPage()
+            } finally {
+                pageMutex.unlock()
+            }
+        }
+    }
 
-        for (chunk in uris.chunked(10)) {
+    private suspend fun fetchNextPage() {
+        val uris = _uiState.value.trackUris
+        if (nextUriIndex >= uris.size) {
+            _uiState.update { it.copy(isLoading = false, hasMoreTracks = false) }
+            return
+        }
+
+        _uiState.update { it.copy(isLoading = true) }
+
+        val end = minOf(nextUriIndex + PAGE_SIZE, uris.size)
+        for (chunk in uris.subList(nextUriIndex, end).chunked(10)) {
             val deferred = chunk.map { uri ->
                 viewModelScope.async(metadataDispatcher) {
                     val trackJson = NativeBridge.metadataGetTrack(uri)
                     trackJson?.let { TrackInfo.fromJson(it) }
                 }
             }
-            val results = deferred.awaitAll()
-            allTracks.addAll(results.filterNotNull())
-
-            // Emit on first chunk, then every 50 tracks
-            if (lastEmitCount == 0 || allTracks.size - lastEmitCount >= 50) {
-                _uiState.update { it.copy(tracks = allTracks.toList()) }
-                lastEmitCount = allTracks.size
-            }
+            loadedTracks.addAll(deferred.awaitAll().filterNotNull())
         }
+        nextUriIndex = end
 
-        _uiState.update { it.copy(tracks = allTracks.toList(), isLoading = false) }
+        _uiState.update {
+            it.copy(
+                tracks = loadedTracks.toList(),
+                isLoading = false,
+                hasMoreTracks = end < uris.size,
+            )
+        }
     }
 }

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -39,6 +40,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -170,7 +172,22 @@ fun TrackListScreen(
                     dev.sources and InputDevice.SOURCE_DPAD != 0
             }
         }
+        val listState = rememberLazyListState()
+
+        // Pull in the next page of track metadata as the user nears the end.
+        LaunchedEffect(listState) {
+            snapshotFlow {
+                val info = listState.layoutInfo
+                (info.visibleItemsInfo.lastOrNull()?.index ?: -1) to info.totalItemsCount
+            }.collect { (lastVisible, total) ->
+                if (total > 0 && lastVisible >= total - 15) {
+                    trackListViewModel.loadMoreTracks()
+                }
+            }
+        }
+
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 16.dp),
@@ -461,8 +478,12 @@ fun TrackListScreen(
                     track = track,
                     showAlbumArt = !state.isAlbum,
                     onClick = {
+                        // Tracks whose metadata failed to resolve are skipped, so the
+                        // row index can drift from the position in trackUris.
+                        val contextIndex = state.trackUris.indexOf(track.uri)
+                            .takeIf { it >= 0 } ?: index
                         playerViewModel.loadTrackFromContext(
-                            state.trackUris, index, state.name, contextUri = uri,
+                            state.trackUris, contextIndex, state.name, contextUri = uri,
                             contextImageUrl = state.albumArtUrl,
                             contextArtistName = state.tracks.firstOrNull()?.artistName ?: "",
                         )
