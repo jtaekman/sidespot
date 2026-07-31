@@ -1,13 +1,19 @@
 package com.sidespot.api
 
 import com.sidespot.auth.AuthManager
+import com.sidespot.bridge.ArtistSummary
 import com.sidespot.bridge.EpisodeSummary
+import com.sidespot.bridge.SearchAlbumResult
+import com.sidespot.bridge.SearchArtistResult
+import com.sidespot.bridge.SearchPlaylistResult
 import com.sidespot.bridge.ShowSummary
+import com.sidespot.bridge.TrackInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
@@ -22,11 +28,159 @@ class SpotifyWebApi(private val authManager: AuthManager) {
     companion object {
         private const val BASE_URL = "https://api.spotify.com/v1"
 
+        /** Largest page size /v1/search accepts; anything higher is rejected. */
+        const val SEARCH_LIMIT = 10
+
         private fun HttpURLConnection.applyDefaults(token: String): HttpURLConnection {
             connectTimeout = 10_000
             readTimeout = 15_000
             setRequestProperty("Authorization", "Bearer $token")
             return this
+        }
+
+        /**
+         * Map the `items` of a search section, skipping the nulls Spotify
+         * sometimes leaves in playlist and album arrays.
+         */
+        private fun <T> JSONObject?.mapItems(transform: (JSONObject) -> T?): List<T> {
+            val items = this?.optJSONArray("items") ?: return emptyList()
+            return (0 until items.length()).mapNotNull { i ->
+                items.optJSONObject(i)?.let(transform)
+            }
+        }
+
+        /** First image of an `images` array, which is the largest one. */
+        private fun JSONObject.firstImageUrl(): String? =
+            optJSONArray("images")?.optJSONObject(0)?.optString("url")?.takeIf { it.isNotEmpty() }
+
+        private fun JSONObject.artistSummaries(): List<ArtistSummary> {
+            val artists = optJSONArray("artists") ?: return emptyList()
+            return (0 until artists.length()).mapNotNull { i ->
+                val artist = artists.optJSONObject(i) ?: return@mapNotNull null
+                ArtistSummary(
+                    uri = artist.optString("uri"),
+                    name = artist.optString("name"),
+                )
+            }
+        }
+
+        private fun JSONObject.toTrackInfo(): TrackInfo? {
+            val uri = optString("uri").takeIf { it.isNotEmpty() } ?: return null
+            val album = optJSONObject("album")
+            return TrackInfo(
+                uri = uri,
+                name = optString("name"),
+                artists = artistSummaries(),
+                albumName = album?.optString("name").orEmpty(),
+                albumUri = album?.optString("uri").orEmpty(),
+                albumArtUrl = album?.firstImageUrl(),
+                durationMs = optInt("duration_ms", 0),
+                trackNumber = optInt("track_number", 0),
+                discNumber = optInt("disc_number", 0),
+                isExplicit = optBoolean("explicit", false),
+            )
+        }
+
+        private fun JSONObject.toArtistResult(): SearchArtistResult? {
+            val uri = optString("uri").takeIf { it.isNotEmpty() } ?: return null
+            return SearchArtistResult(
+                uri = uri,
+                name = optString("name"),
+                imageUrl = firstImageUrl(),
+            )
+        }
+
+        private fun JSONObject.toAlbumResult(): SearchAlbumResult? {
+            val uri = optString("uri").takeIf { it.isNotEmpty() } ?: return null
+            return SearchAlbumResult(
+                uri = uri,
+                name = optString("name"),
+                artistName = artistSummaries().joinToString(", ") { it.name },
+                albumArtUrl = firstImageUrl(),
+            )
+        }
+
+        private fun JSONObject.toPlaylistResult(): SearchPlaylistResult? {
+            val uri = optString("uri").takeIf { it.isNotEmpty() } ?: return null
+            return SearchPlaylistResult(
+                uri = uri,
+                name = optString("name"),
+                ownerName = optJSONObject("owner")?.optString("display_name").orEmpty(),
+                imageUrl = firstImageUrl(),
+            )
+        }
+
+        /** Search results carry no `publisher`, unlike the library show endpoints. */
+        private fun JSONObject.toShowSummary(): ShowSummary? {
+            val uri = optString("uri").takeIf { it.isNotEmpty() } ?: return null
+            return ShowSummary(
+                uri = uri,
+                name = optString("name"),
+                publisher = optString("publisher"),
+                imageUrl = firstImageUrl(),
+            )
+        }
+    }
+
+    /**
+     * One page of search results.  Only the sections named in the request are
+     * populated; the rest stay empty with a zero total.
+     */
+    data class SearchResponse(
+        val tracks: List<TrackInfo> = emptyList(),
+        val artists: List<SearchArtistResult> = emptyList(),
+        val albums: List<SearchAlbumResult> = emptyList(),
+        val playlists: List<SearchPlaylistResult> = emptyList(),
+        val shows: List<ShowSummary> = emptyList(),
+        val totalTracks: Int = 0,
+        val totalArtists: Int = 0,
+        val totalAlbums: Int = 0,
+        val totalPlaylists: Int = 0,
+        val totalShows: Int = 0,
+    )
+
+    /**
+     * Search the catalogue.
+     * GET /v1/search?q={query}&type={types}&limit={limit}&offset={offset}
+     *
+     * The API caps `limit` at [SEARCH_LIMIT]; deeper results come from `offset`.
+     * Pass a single type when paginating one section, or several to fill the
+     * whole screen in one round trip.
+     */
+    suspend fun search(
+        query: String,
+        types: List<String>,
+        offset: Int = 0,
+    ): SearchResponse? = withContext(Dispatchers.IO) {
+        val token = authManager.getValidAccessToken() ?: return@withContext null
+        val encoded = URLEncoder.encode(query, "UTF-8")
+        val typeParam = types.joinToString("%2C")
+        val conn = (URL("$BASE_URL/search?q=$encoded&type=$typeParam&limit=$SEARCH_LIMIT&offset=$offset")
+            .openConnection() as HttpURLConnection).applyDefaults(token)
+        try {
+            if (conn.responseCode !in 200..299) {
+                val err = conn.errorStream?.bufferedReader()?.readText()
+                android.util.Log.w("SpotifyWebApi", "search HTTP ${conn.responseCode}: $err")
+                return@withContext null
+            }
+            val json = JSONObject(conn.inputStream.bufferedReader().readText())
+            SearchResponse(
+                tracks = json.optJSONObject("tracks").mapItems { it.toTrackInfo() },
+                artists = json.optJSONObject("artists").mapItems { it.toArtistResult() },
+                albums = json.optJSONObject("albums").mapItems { it.toAlbumResult() },
+                playlists = json.optJSONObject("playlists").mapItems { it.toPlaylistResult() },
+                shows = json.optJSONObject("shows").mapItems { it.toShowSummary() },
+                totalTracks = json.optJSONObject("tracks")?.optInt("total", 0) ?: 0,
+                totalArtists = json.optJSONObject("artists")?.optInt("total", 0) ?: 0,
+                totalAlbums = json.optJSONObject("albums")?.optInt("total", 0) ?: 0,
+                totalPlaylists = json.optJSONObject("playlists")?.optInt("total", 0) ?: 0,
+                totalShows = json.optJSONObject("shows")?.optInt("total", 0) ?: 0,
+            )
+        } catch (e: Exception) {
+            android.util.Log.e("SpotifyWebApi", "search failed", e)
+            null
+        } finally {
+            conn.disconnect()
         }
     }
 

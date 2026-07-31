@@ -130,6 +130,13 @@ data class SearchAlbumResult(
 )
 
 @Serializable
+data class SearchArtistResult(
+    val uri: String,
+    val name: String,
+    @SerialName("image_url") val imageUrl: String? = null,
+)
+
+@Serializable
 data class SearchPlaylistResult(
     val uri: String,
     val name: String,

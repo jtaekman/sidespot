@@ -428,27 +428,6 @@ pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_metadataSearch(
     }
 }
 
-/// Search Spotify (paginated, single type). Returns JSON with items + total.
-#[unsafe(no_mangle)]
-pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_metadataSearchMore(
-    mut env: JNIEnv,
-    _class: JClass,
-    query: JString,
-    search_type: JString,
-    offset: jint,
-) -> jstring {
-    let q = jstring_to_string(&mut env, &query);
-    let t = jstring_to_string(&mut env, &search_type);
-    match block_on(metadata::search_more(&q, &t, offset as u32)) {
-        Ok(json) => string_to_jstring(&mut env, &json),
-        Err(e) => {
-            let msg = format!("{{\"error\":\"{e}\"}}");
-            log::error!("metadataSearchMore failed: {e}");
-            string_to_jstring(&mut env, &msg)
-        }
-    }
-}
-
 /// Get autoplay (recommended) tracks. Takes context URI and recent track URIs as JSON array.
 /// Returns JSON array of track URI strings, or error JSON.
 #[unsafe(no_mangle)]

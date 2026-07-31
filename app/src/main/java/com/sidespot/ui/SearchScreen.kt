@@ -17,10 +17,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LibraryAdd
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Podcasts
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.RemoveCircleOutline
@@ -58,6 +60,7 @@ import com.sidespot.api.ApiResult
 import com.sidespot.bridge.ShowSummary
 import com.sidespot.bridge.TrackInfo
 import com.sidespot.viewmodel.AlbumResult
+import com.sidespot.viewmodel.ArtistResult
 import com.sidespot.viewmodel.LibraryViewModel
 import com.sidespot.viewmodel.PlayerViewModel
 import com.sidespot.viewmodel.PlaylistResult
@@ -128,14 +131,17 @@ fun SearchScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        if (state.isSearching && state.tracks.isEmpty() && state.albums.isEmpty() && state.shows.isEmpty() && state.playlists.isEmpty()) {
+        val hasResults = state.tracks.isNotEmpty() || state.artists.isNotEmpty() ||
+            state.albums.isNotEmpty() || state.shows.isNotEmpty() || state.playlists.isNotEmpty()
+
+        if (state.isSearching && !hasResults) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
             ) {
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
-        } else if (state.tracks.isEmpty() && state.albums.isEmpty() && state.shows.isEmpty() && state.playlists.isEmpty() && state.query.isNotBlank() && !state.isSearching) {
+        } else if (!hasResults && state.query.isNotBlank() && !state.isSearching) {
             Text(
                 text = state.error ?: "No results",
                 style = MaterialTheme.typography.bodyMedium,
@@ -145,6 +151,9 @@ fun SearchScreen(
         } else {
             val displayedTracks = remember(state.tracks, state.tracksDisplayLimit) {
                 state.tracks.take(state.tracksDisplayLimit)
+            }
+            val displayedArtists = remember(state.artists, state.artistsDisplayLimit) {
+                state.artists.take(state.artistsDisplayLimit)
             }
             val displayedAlbums = remember(state.albums, state.albumsDisplayLimit) {
                 state.albums.take(state.albumsDisplayLimit)
@@ -190,6 +199,40 @@ fun SearchScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable { searchViewModel.showMoreTracks() }
+                                    .padding(vertical = 12.dp),
+                            )
+                        }
+                    }
+                }
+
+                // Artists section
+                if (state.artists.isNotEmpty()) {
+                    item(contentType = "header") {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Artists",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(vertical = 4.dp),
+                        )
+                    }
+
+                    itemsIndexed(displayedArtists, key = { _, artist -> artist.uri }, contentType = { _, _ -> "artist" }) { _, artist ->
+                        ArtistResultRow(
+                            artist = artist,
+                            onClick = { onArtistClick(artist.uri) },
+                        )
+                    }
+
+                    if (state.hasMoreArtists) {
+                        item(contentType = "show_more") {
+                            Text(
+                                text = "Show More...",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { searchViewModel.showMoreArtists() }
                                     .padding(vertical = 12.dp),
                             )
                         }
@@ -527,6 +570,59 @@ private fun SearchResultRow(
 }
 
 @Composable
+private fun ArtistResultRow(
+    artist: ArtistResult,
+    onClick: () -> Unit,
+) {
+    val context = LocalContext.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .focusHighlight()
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (artist.imageUrl != null) {
+            AsyncImage(
+                model = ImageRequest.Builder(context).data(artist.imageUrl).size(96).build(),
+                contentDescription = null,
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape),
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Person,
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Text(
+            text = artist.name,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
 private fun AlbumResultRow(
     album: AlbumResult,
     onClick: () -> Unit,
@@ -703,13 +799,16 @@ private fun ShowResultRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text = show.publisher,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            // Search results have no publisher; skip the line rather than leave it blank.
+            if (show.publisher.isNotBlank()) {
+                Text(
+                    text = show.publisher,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }

@@ -125,11 +125,8 @@ object NativeBridge {
     /** Get user's liked songs. Returns JSON playlist info. */
     external fun metadataGetLikedSongs(): String?
 
-    /** Search Spotify. Returns JSON search results. */
+    /** Search Spotify via the session. Returns JSON search results (tracks only). */
     external fun metadataSearch(query: String): String?
-
-    /** Paginated search for a single entity type. Returns JSON with items + total. */
-    external fun metadataSearchMore(query: String, searchType: String, offset: Int): String?
 
     /** Get autoplay tracks for a context. Returns JSON array of track URIs. */
     external fun metadataGetAutoplayTracks(contextUri: String, recentTrackUrisJson: String): String?
