@@ -113,6 +113,9 @@ object NativeBridge {
     /** Get album metadata by URI. Returns JSON string. */
     external fun metadataGetAlbum(albumUri: String): String?
 
+    /** Get artist metadata by URI (portrait, top tracks, albums, singles). Returns JSON string. */
+    external fun metadataGetArtist(artistUri: String): String?
+
     /** Get playlist metadata by URI. Returns JSON string. */
     external fun metadataGetPlaylist(playlistUri: String): String?
 
@@ -148,6 +151,12 @@ object NativeBridge {
     /** Remove a show from the library via native collection v2. Returns JSON result. */
     external fun libraryUnsaveShow(showUri: String): String?
 
+    /** Follow an artist via native collection v2. Returns JSON result. */
+    external fun libraryFollowArtist(artistUri: String): String?
+
+    /** Unfollow an artist via native collection v2. Returns JSON result. */
+    external fun libraryUnfollowArtist(artistUri: String): String?
+
     /** Save (follow) a playlist to the library via rootlist v2. Returns JSON result. */
     external fun librarySavePlaylist(playlistUri: String): String?
 
@@ -167,6 +176,9 @@ object NativeBridge {
 
     /** Get user's saved shows via native collection v2. Returns JSON array. */
     external fun metadataGetSavedShows(): String?
+
+    /** Get user's followed artists via native collection v2. Returns JSON array. */
+    external fun metadataGetFollowedArtists(): String?
 
     /** Get episodes for a show. Returns JSON array of episode summaries. */
     external fun metadataGetShowEpisodes(showUri: String): String?

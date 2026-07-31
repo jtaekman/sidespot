@@ -7,7 +7,8 @@ use bytes::Bytes;
 use hyper::Method;
 use librespot_core::SpotifyUri;
 use librespot_metadata::image::ImageSize;
-use librespot_metadata::{Album, Metadata, Playlist, Track};
+use librespot_core::Session;
+use librespot_metadata::{Album, Artist, Metadata, Playlist, Track};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, SidespotError};
@@ -57,6 +58,25 @@ pub struct TrackSummary {
     pub track_number: i32,
     pub disc_number: i32,
     pub is_explicit: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ArtistAlbum {
+    pub uri: String,
+    pub name: String,
+    pub image_url: Option<String>,
+    pub year: i32,
+    pub track_count: i32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ArtistInfo {
+    pub uri: String,
+    pub name: String,
+    pub image_url: Option<String>,
+    pub top_tracks: Vec<TrackInfo>,
+    pub albums: Vec<ArtistAlbum>,
+    pub singles: Vec<ArtistAlbum>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -173,6 +193,139 @@ pub async fn get_track_info(uri: &str) -> Result<String> {
         track_number: track.number,
         disc_number: track.disc_number,
         is_explicit: track.is_explicit,
+    };
+
+    Ok(serde_json::to_string(&info)?)
+}
+
+/// Top tracks shown on the artist page.
+const TOP_TRACK_LIMIT: usize = 10;
+
+/// Cap on albums (and separately, singles) shown on the artist page.  Each one
+/// costs an `Album::get`, so prolific artists would otherwise be very slow.
+const ARTIST_ALBUM_LIMIT: usize = 50;
+
+/// Resolve track URIs to full `TrackInfo`, preserving the input order.
+async fn fetch_track_infos(session: &Session, uris: &[SpotifyUri]) -> Vec<TrackInfo> {
+    let mut tracks = Vec::with_capacity(uris.len());
+    for chunk in uris.chunks(10) {
+        let mut handles = Vec::new();
+        for track_uri in chunk {
+            let sess = session.clone();
+            let tu = track_uri.clone();
+            handles.push(tokio::spawn(async move {
+                let track = Track::get(&sess, &tu).await.ok()?;
+                let artists: Vec<ArtistSummary> = track
+                    .artists
+                    .iter()
+                    .map(|a| ArtistSummary {
+                        uri: a.id.to_uri(),
+                        name: a.name.clone(),
+                    })
+                    .collect();
+                Some(TrackInfo {
+                    uri: track.id.to_uri(),
+                    name: track.name.clone(),
+                    artists,
+                    album_name: track.album.name.clone(),
+                    album_uri: track.album.id.to_uri(),
+                    album_art_url: image_url_from_images(&track.album.covers),
+                    duration_ms: track.duration,
+                    track_number: track.number,
+                    disc_number: track.disc_number,
+                    is_explicit: track.is_explicit,
+                })
+            }));
+        }
+        for handle in handles {
+            if let Ok(Some(t)) = handle.await {
+                tracks.push(t);
+            }
+        }
+    }
+    tracks
+}
+
+/// Resolve album URIs to the lightweight shape the artist page renders.
+async fn fetch_artist_albums(session: &Session, uris: &[SpotifyUri]) -> Vec<ArtistAlbum> {
+    let mut albums = Vec::with_capacity(uris.len());
+    for chunk in uris.chunks(10) {
+        let mut handles = Vec::new();
+        for album_uri in chunk {
+            let sess = session.clone();
+            let au = album_uri.clone();
+            handles.push(tokio::spawn(async move {
+                let album = Album::get(&sess, &au).await.ok()?;
+                Some(ArtistAlbum {
+                    uri: album.id.to_uri(),
+                    name: album.name.clone(),
+                    image_url: image_url_from_images(&album.covers),
+                    year: album.date.year(),
+                    track_count: album.tracks().count() as i32,
+                })
+            }));
+        }
+        for handle in handles {
+            if let Ok(Some(a)) = handle.await {
+                albums.push(a);
+            }
+        }
+    }
+    albums
+}
+
+/// Fetch artist metadata: portrait, top tracks, albums and singles.
+pub async fn get_artist_info(uri: &str) -> Result<String> {
+    let session = session::get_session().await?;
+    let spotify_uri = SpotifyUri::from_uri(uri)
+        .map_err(|e| SidespotError::Player(format!("invalid URI '{uri}': {e}")))?;
+    let SpotifyUri::Artist { .. } = spotify_uri else {
+        return Err(SidespotError::Player(format!("not an artist URI: {uri}")));
+    };
+
+    let artist = Artist::get(&session, &spotify_uri)
+        .await
+        .map_err(|e| SidespotError::Player(format!("failed to get artist metadata: {e}")))?;
+
+    let image_url = image_url_from_images(&artist.portraits)
+        .or_else(|| image_url_from_images(&artist.portrait_group));
+
+    // Top tracks come back in popularity order; keep it.
+    let country = session.country();
+    let top_uris: Vec<SpotifyUri> = artist
+        .top_tracks
+        .for_country(&country)
+        .iter()
+        .take(TOP_TRACK_LIMIT)
+        .cloned()
+        .collect();
+    let top_tracks = fetch_track_infos(&session, &top_uris).await;
+
+    let album_uris: Vec<SpotifyUri> = artist
+        .albums_current()
+        .take(ARTIST_ALBUM_LIMIT)
+        .cloned()
+        .collect();
+    let single_uris: Vec<SpotifyUri> = artist
+        .singles_current()
+        .take(ARTIST_ALBUM_LIMIT)
+        .cloned()
+        .collect();
+
+    let mut albums = fetch_artist_albums(&session, &album_uris).await;
+    let mut singles = fetch_artist_albums(&session, &single_uris).await;
+
+    // Catalogue group order is not reliably newest-first.
+    albums.sort_by(|a, b| b.year.cmp(&a.year).then_with(|| a.name.cmp(&b.name)));
+    singles.sort_by(|a, b| b.year.cmp(&a.year).then_with(|| a.name.cmp(&b.name)));
+
+    let info = ArtistInfo {
+        uri: spotify_uri.to_uri(),
+        name: artist.name.clone(),
+        image_url,
+        top_tracks,
+        albums,
+        singles,
     };
 
     Ok(serde_json::to_string(&info)?)

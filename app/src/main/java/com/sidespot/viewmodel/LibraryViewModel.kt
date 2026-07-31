@@ -11,6 +11,7 @@ import com.sidespot.bridge.AlbumSummary
 import com.sidespot.bridge.EpisodeSummary
 import com.sidespot.bridge.NativeBridge
 import com.sidespot.bridge.PlaylistSummary
+import com.sidespot.bridge.SavedArtist
 import com.sidespot.bridge.ShowSummary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,10 +35,12 @@ data class LibraryUiState(
     val libraryItems: List<LibraryItem> = emptyList(),
     val albums: List<AlbumSummary> = emptyList(),
     val shows: List<ShowSummary> = emptyList(),
+    val artists: List<SavedArtist> = emptyList(),
     val episodes: List<EpisodeSummary> = emptyList(),
     val isLoading: Boolean = true,
     val isLoadingAlbums: Boolean = false,
     val isLoadingShows: Boolean = false,
+    val isLoadingArtists: Boolean = false,
     val isLoadingEpisodes: Boolean = false,
     val newEpisodes: List<EpisodeSummary> = emptyList(),
     val isLoadingNewEpisodes: Boolean = false,
@@ -290,6 +293,19 @@ class LibraryViewModel : ViewModel() {
         }
     }
 
+    fun loadFollowedArtists() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(isLoadingArtists = true) }
+            val json = NativeBridge.metadataGetFollowedArtists()
+            val artists = if (json != null && !json.startsWith("{\"error\"")) {
+                SavedArtist.listFromJson(json) ?: emptyList()
+            } else {
+                emptyList()
+            }
+            _uiState.update { it.copy(artists = artists, isLoadingArtists = false) }
+        }
+    }
+
     fun loadShowEpisodes(showUri: String) {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isLoadingEpisodes = true, episodes = emptyList()) }
@@ -389,6 +405,18 @@ class LibraryViewModel : ViewModel() {
             if (result is ApiResult.Success) {
                 _uiState.update { state ->
                     state.copy(shows = state.shows.filter { it.uri != showUri })
+                }
+            }
+            onResult(result)
+        }
+    }
+
+    fun unfollowArtist(artistUri: String, onResult: (ApiResult) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = parseNativeResult(NativeBridge.libraryUnfollowArtist(artistUri))
+            if (result is ApiResult.Success) {
+                _uiState.update { state ->
+                    state.copy(artists = state.artists.filter { it.uri != artistUri })
                 }
             }
             onResult(result)

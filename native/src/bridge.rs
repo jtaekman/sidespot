@@ -341,6 +341,25 @@ pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_metadataGetAlbum(
     }
 }
 
+/// Get artist metadata by URI (portrait, top tracks, albums, singles).
+/// Returns JSON string or error.
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_metadataGetArtist(
+    mut env: JNIEnv,
+    _class: JClass,
+    artist_uri: JString,
+) -> jstring {
+    let uri = jstring_to_string(&mut env, &artist_uri);
+    match block_on(metadata::get_artist_info(&uri)) {
+        Ok(json) => string_to_jstring(&mut env, &json),
+        Err(e) => {
+            let msg = format!("{{\"error\":\"{e}\"}}");
+            log::error!("metadataGetArtist failed: {e}");
+            string_to_jstring(&mut env, &msg)
+        }
+    }
+}
+
 /// Get playlist metadata by URI. Returns JSON string or error.
 #[unsafe(no_mangle)]
 pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_metadataGetPlaylist(
@@ -548,6 +567,42 @@ pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_libraryUnsaveShow(
     }
 }
 
+/// Unfollow an artist via collection v2.
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_libraryUnfollowArtist(
+    mut env: JNIEnv,
+    _class: JClass,
+    artist_uri: JString,
+) -> jstring {
+    let uri = jstring_to_string(&mut env, &artist_uri);
+    match block_on(library::unfollow_artist(&uri)) {
+        Ok(json) => string_to_jstring(&mut env, &json),
+        Err(e) => {
+            let msg = format!("{{\"success\":false,\"error\":\"{e}\"}}");
+            log::error!("libraryUnfollowArtist failed: {e}");
+            string_to_jstring(&mut env, &msg)
+        }
+    }
+}
+
+/// Follow an artist via collection v2.
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_libraryFollowArtist(
+    mut env: JNIEnv,
+    _class: JClass,
+    artist_uri: JString,
+) -> jstring {
+    let uri = jstring_to_string(&mut env, &artist_uri);
+    match block_on(library::follow_artist(&uri)) {
+        Ok(json) => string_to_jstring(&mut env, &json),
+        Err(e) => {
+            let msg = format!("{{\"success\":false,\"error\":\"{e}\"}}");
+            log::error!("libraryFollowArtist failed: {e}");
+            string_to_jstring(&mut env, &msg)
+        }
+    }
+}
+
 /// Save (follow) a playlist to the user's library via rootlist v2.
 #[unsafe(no_mangle)]
 pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_librarySavePlaylist(
@@ -653,6 +708,22 @@ pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_metadataGetSavedShows(
         Err(e) => {
             let msg = format!("{{\"error\":\"{e}\"}}");
             log::error!("metadataGetSavedShows failed: {e}");
+            string_to_jstring(&mut env, &msg)
+        }
+    }
+}
+
+/// Get user's followed artists via collection v2. Returns JSON array.
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_metadataGetFollowedArtists(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    match block_on(library::get_followed_artists()) {
+        Ok(json) => string_to_jstring(&mut env, &json),
+        Err(e) => {
+            let msg = format!("{{\"error\":\"{e}\"}}");
+            log::error!("metadataGetFollowedArtists failed: {e}");
             string_to_jstring(&mut env, &msg)
         }
     }

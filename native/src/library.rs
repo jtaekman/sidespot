@@ -4,10 +4,12 @@
 //! the SpClient proxy. Read operations for albums/shows also use collection v2.
 //! Playlist operations use librespot's internal protobuf APIs.
 
-use librespot_core::SpotifyUri;
+use std::collections::HashSet;
+
+use librespot_core::{Session, SpotifyUri};
 use librespot_metadata::image::ImageSize;
-use librespot_metadata::{Album, Episode, Metadata, Show};
-use librespot_protocol::collection2v2::CollectionItem;
+use librespot_metadata::{Album, Artist, Episode, Metadata, Show};
+use librespot_protocol::collection2v2::{CollectionItem, PageResponse};
 use protobuf::Message;
 use serde::Serialize;
 
@@ -50,6 +52,13 @@ pub struct ShowSummary {
 }
 
 #[derive(Debug, Serialize)]
+pub struct SavedArtist {
+    pub uri: String,
+    pub name: String,
+    pub image_url: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct EpisodeInfo {
     pub uri: String,
     pub name: String,
@@ -62,6 +71,90 @@ pub struct EpisodeInfo {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Collection v2 set holding followed artists.  Spotify does not document its
+/// set names; this is the only place the string lives so it is cheap to change
+/// if the read tiers in `get_followed_artists` show it is wrong.
+const ARTIST_COLLECTION_SET: &str = "artist";
+
+/// Items requested per collection v2 page.
+const COLLECTION_PAGE_LIMIT: i32 = 100;
+
+/// Upper bound on collection pages, so a server that ignores the pagination
+/// token can never spin us forever.
+const MAX_COLLECTION_PAGES: usize = 50;
+
+/// Walk a collection v2 set to exhaustion, following `next_page_token`.
+///
+/// The older readers (`get_saved_albums`, `get_saved_shows`) request a single
+/// page of 50 and silently drop the tail; this follows every page.
+async fn collect_collection_items(
+    session: &Session,
+    username: &str,
+    set: &str,
+) -> Result<Vec<CollectionItem>> {
+    let mut items: Vec<CollectionItem> = Vec::new();
+    let mut token = String::new();
+    let mut seen_tokens: HashSet<String> = HashSet::new();
+
+    for _ in 0..MAX_COLLECTION_PAGES {
+        let resp = session
+            .spclient()
+            .collection_page(username, set, &token, COLLECTION_PAGE_LIMIT)
+            .await
+            .map_err(|e| SidespotError::Player(format!("collection_page({set}) failed: {e}")))?;
+
+        let page = PageResponse::parse_from_bytes(&resp).map_err(|e| {
+            SidespotError::Player(format!("parse page response({set}) failed: {e}"))
+        })?;
+
+        let got = page.items.len();
+        items.extend(page.items);
+
+        let next = page.next_page_token;
+        // Stop on the last page, an empty page, or a server that replays a token.
+        if next.is_empty() || got == 0 || !seen_tokens.insert(next.clone()) {
+            break;
+        }
+        token = next;
+    }
+
+    Ok(items)
+}
+
+/// Recursively collect every `spotify:artist:` string in an arbitrary JSON value.
+///
+/// The user-profile-view "following" response shape is undocumented, so this
+/// stays deliberately shape-agnostic.
+fn walk_artist_uris(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(s) if s.starts_with("spotify:artist:") => out.push(s.clone()),
+        serde_json::Value::Array(a) => a.iter().for_each(|v| walk_artist_uris(v, out)),
+        serde_json::Value::Object(o) => o.values().for_each(|v| walk_artist_uris(v, out)),
+        _ => {}
+    }
+}
+
+/// Last-resort source of followed artists: the public profile "following" list.
+async fn following_artist_uris(session: &Session, username: &str) -> Vec<String> {
+    let body = match session.spclient().get_user_following(username).await {
+        Ok(b) => b,
+        Err(e) => {
+            log::warn!("get_user_following failed: {e}");
+            return Vec::new();
+        }
+    };
+    let value: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("parse following response failed: {e}");
+            return Vec::new();
+        }
+    };
+    let mut uris = Vec::new();
+    walk_artist_uris(&value, &mut uris);
+    uris
+}
 
 fn image_url_from_images(images: &librespot_metadata::image::Images) -> Option<String> {
     let preferred_order = [ImageSize::LARGE, ImageSize::DEFAULT, ImageSize::SMALL];
@@ -363,9 +456,125 @@ pub async fn unsave_playlist(playlist_uri: &str) -> Result<String> {
     ok_result()
 }
 
+/// Unfollow an artist.
+pub async fn unfollow_artist(artist_uri: &str) -> Result<String> {
+    let session = session::get_session().await?;
+    let username = session.username();
+
+    let item = make_removal_item(artist_uri);
+    session
+        .spclient()
+        .collection_write(&username, ARTIST_COLLECTION_SET, &[item])
+        .await
+        .map_err(|e| SidespotError::Player(format!("unfollow artist failed: {e}")))?;
+
+    ok_result()
+}
+
+/// Follow an artist.
+pub async fn follow_artist(artist_uri: &str) -> Result<String> {
+    let session = session::get_session().await?;
+    let username = session.username();
+
+    let item = make_collection_item(artist_uri);
+    session
+        .spclient()
+        .collection_write(&username, ARTIST_COLLECTION_SET, &[item])
+        .await
+        .map_err(|e| SidespotError::Player(format!("follow artist failed: {e}")))?;
+
+    ok_result()
+}
+
 // ---------------------------------------------------------------------------
 // Read operations
 // ---------------------------------------------------------------------------
+
+/// Get the user's followed artists, then fetch name + portrait for each.
+///
+/// Spotify's set names are undocumented, so this tries the dedicated "artist"
+/// set, then the main "collection" set, then the profile "following" list, and
+/// logs which one produced the result.
+pub async fn get_followed_artists() -> Result<String> {
+    let session = session::get_session().await?;
+    let username = session.username();
+
+    fn artist_uris(items: Vec<CollectionItem>) -> Vec<(String, i32)> {
+        items
+            .into_iter()
+            .filter(|i| !i.is_removed && i.uri.starts_with("spotify:artist:"))
+            .map(|i| (i.uri, i.added_at))
+            .collect()
+    }
+
+    let mut source = ARTIST_COLLECTION_SET;
+    let mut ordered = artist_uris(
+        collect_collection_items(&session, &username, ARTIST_COLLECTION_SET)
+            .await
+            .unwrap_or_else(|e| {
+                log::warn!("read '{ARTIST_COLLECTION_SET}' set failed: {e}");
+                Vec::new()
+            }),
+    );
+
+    if ordered.is_empty() {
+        source = "collection";
+        ordered = artist_uris(
+            collect_collection_items(&session, &username, "collection")
+                .await
+                .unwrap_or_else(|e| {
+                    log::warn!("read 'collection' set failed: {e}");
+                    Vec::new()
+                }),
+        );
+    }
+
+    if ordered.is_empty() {
+        source = "profile-following";
+        ordered = following_artist_uris(&session, &username)
+            .await
+            .into_iter()
+            .map(|uri| (uri, 0))
+            .collect();
+    }
+
+    // Most recently followed first, de-duplicated.
+    ordered.sort_by(|a, b| b.1.cmp(&a.1));
+    let mut seen = HashSet::new();
+    ordered.retain(|(uri, _)| seen.insert(uri.clone()));
+
+    log::info!(
+        "followed artists: {} item(s) via '{source}'",
+        ordered.len()
+    );
+
+    let mut artists = Vec::with_capacity(ordered.len());
+    for chunk in ordered.chunks(10) {
+        let mut handles = Vec::new();
+        for (uri_str, _) in chunk {
+            let uri_str = uri_str.clone();
+            let sess = session.clone();
+            handles.push(tokio::spawn(async move {
+                let uri = SpotifyUri::from_uri(&uri_str).ok()?;
+                let artist = Artist::get(&sess, &uri).await.ok()?;
+                let image_url = image_url_from_images(&artist.portraits)
+                    .or_else(|| image_url_from_images(&artist.portrait_group));
+                Some(SavedArtist {
+                    uri: uri_str,
+                    name: artist.name,
+                    image_url,
+                })
+            }));
+        }
+        for handle in handles {
+            if let Ok(Some(a)) = handle.await {
+                artists.push(a);
+            }
+        }
+    }
+
+    Ok(serde_json::to_string(&artists)?)
+}
 
 /// Get the user's saved albums via collection v2 paging, then fetch metadata.
 pub async fn get_saved_albums() -> Result<String> {

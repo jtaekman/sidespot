@@ -68,6 +68,7 @@ fun TrackListScreen(
     libraryViewModel: LibraryViewModel = viewModel(),
     onBack: () -> Unit,
     onGoToAlbum: (String) -> Unit = {},
+    onGoToArtist: (String) -> Unit = {},
     onPlayStarted: () -> Unit = {},
     trackListViewModel: TrackListViewModel = viewModel(key = uri),
 ) {
@@ -528,22 +529,25 @@ fun TrackListScreen(
             onGoToAlbum = if (!state.isAlbum && selectedTrack != null) {
                 { onGoToAlbum(selectedTrack.albumUri) }
             } else null,
+            artists = selectedTrack?.artists.orEmpty(),
+            onGoToArtist = onGoToArtist,
         )
     }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TrackRow(
+internal fun TrackRow(
     index: Int,
     track: TrackInfo,
     showAlbumArt: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .focusHighlight(onEnterKey = onLongClick)
             .combinedClickable(
@@ -618,7 +622,7 @@ private fun TrackRow(
     }
 }
 
-private fun formatDuration(ms: Int): String {
+internal fun formatDuration(ms: Int): String {
     val totalSeconds = ms / 1000
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60

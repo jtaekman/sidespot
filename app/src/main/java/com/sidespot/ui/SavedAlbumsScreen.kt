@@ -76,7 +76,11 @@ fun SavedAlbumsScreen(
 
     LaunchedEffect(firstAlbumFocusReady) {
         if (firstAlbumFocusReady) {
-            firstAlbumFocus.requestFocus()
+            // The row can be detached between the flag flipping and this running.
+            try {
+                firstAlbumFocus.requestFocus()
+            } catch (_: IllegalStateException) {
+            }
         }
     }
 
@@ -163,25 +167,23 @@ fun SavedAlbumsScreen(
                     )
                     Spacer(modifier = Modifier.height(32.dp))
                 } else {
+                    val unsave = {
+                        // Removing the focused row makes the focus system fall back to
+                        // this screen's `enter` requester while it is briefly detached,
+                        // which throws.  Disarm it until a row re-attaches.
+                        firstAlbumFocusReady = false
+                        libraryViewModel.unsaveAlbum(selectedAlbumUri!!) { result ->
+                            feedbackText = when (result) {
+                                is ApiResult.Success -> "Removed from Library"
+                                is ApiResult.Error -> "Error: ${result.message}"
+                            }
+                        }
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .focusHighlight(onEnterKey = {
-                                libraryViewModel.unsaveAlbum(selectedAlbumUri!!) { result ->
-                                    feedbackText = when (result) {
-                                        is ApiResult.Success -> "Removed from Library"
-                                        is ApiResult.Error -> "Error: ${result.message}"
-                                    }
-                                }
-                            })
-                            .clickable {
-                                libraryViewModel.unsaveAlbum(selectedAlbumUri!!) { result ->
-                                    feedbackText = when (result) {
-                                        is ApiResult.Success -> "Removed from Library"
-                                        is ApiResult.Error -> "Error: ${result.message}"
-                                    }
-                                }
-                            }
+                            .focusHighlight(onEnterKey = unsave)
+                            .clickable(onClick = unsave)
                             .padding(vertical = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {

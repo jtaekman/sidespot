@@ -185,6 +185,48 @@ data class ShowSummary(
 }
 
 @Serializable
+data class SavedArtist(
+    val uri: String,
+    val name: String,
+    @SerialName("image_url") val imageUrl: String? = null,
+) {
+    companion object {
+        fun listFromJson(jsonString: String): List<SavedArtist>? = try {
+            json.decodeFromString<List<SavedArtist>>(jsonString)
+        } catch (_: Exception) {
+            null
+        }
+    }
+}
+
+@Serializable
+data class ArtistAlbum(
+    val uri: String,
+    val name: String,
+    @SerialName("image_url") val imageUrl: String? = null,
+    val year: Int = 0,
+    @SerialName("track_count") val trackCount: Int = 0,
+)
+
+@Serializable
+data class ArtistInfo(
+    val uri: String,
+    val name: String,
+    @SerialName("image_url") val imageUrl: String? = null,
+    @SerialName("top_tracks") val topTracks: List<TrackInfo> = emptyList(),
+    val albums: List<ArtistAlbum> = emptyList(),
+    val singles: List<ArtistAlbum> = emptyList(),
+) {
+    companion object {
+        fun fromJson(jsonString: String): ArtistInfo? = try {
+            json.decodeFromString<ArtistInfo>(jsonString)
+        } catch (_: Exception) {
+            null
+        }
+    }
+}
+
+@Serializable
 data class EpisodeSummary(
     val uri: String,
     val name: String,

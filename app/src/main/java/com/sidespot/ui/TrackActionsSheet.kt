@@ -12,12 +12,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -41,11 +44,12 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.sidespot.api.ApiResult
+import com.sidespot.bridge.ArtistSummary
 import com.sidespot.bridge.PlaylistSummary
 import com.sidespot.viewmodel.PlayerViewModel
 import kotlinx.coroutines.delay
 
-private enum class SheetView { Actions, PlaylistPicker, NewPlaylist, Feedback }
+private enum class SheetView { Actions, PlaylistPicker, ArtistPicker, NewPlaylist, Feedback }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,9 +59,17 @@ fun TrackActionsSheet(
     playlists: List<PlaylistSummary>,
     onDismiss: () -> Unit,
     onGoToAlbum: (() -> Unit)? = null,
+    artists: List<ArtistSummary> = emptyList(),
+    onGoToArtist: ((String) -> Unit)? = null,
 ) {
     var view by remember { mutableStateOf(SheetView.Actions) }
     var feedbackText by remember { mutableStateOf("") }
+
+    // Podcast episodes carry a placeholder artist with a blank URI, so filter to
+    // the ones we can actually navigate to.
+    val navigableArtists = remember(artists) {
+        artists.filter { it.uri.startsWith("spotify:artist:") }
+    }
 
     // Auto-dismiss after showing feedback
     if (view == SheetView.Feedback) {
@@ -75,7 +87,13 @@ fun TrackActionsSheet(
     ) {
         when (view) {
             SheetView.Actions -> {
-                Column(modifier = Modifier.navigationBarsPadding().padding(16.dp)) {
+                // The action list can outgrow the sheet on short screens, so scroll it.
+                Column(
+                    modifier = Modifier
+                        .navigationBarsPadding()
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp),
+                ) {
                     SheetActionRow(Icons.Default.QueueMusic, "Add to Queue") {
                         playerViewModel.addToQueue(trackUri)
                         feedbackText = "Added to Queue"
@@ -99,6 +117,46 @@ fun TrackActionsSheet(
                             onGoToAlbum()
                         }
                     }
+                    if (onGoToArtist != null && navigableArtists.isNotEmpty()) {
+                        SheetActionRow(Icons.Default.Person, "Go to Artist") {
+                            if (navigableArtists.size == 1) {
+                                onDismiss()
+                                onGoToArtist(navigableArtists[0].uri)
+                            } else {
+                                view = SheetView.ArtistPicker
+                            }
+                        }
+                    }
+                }
+            }
+            SheetView.ArtistPicker -> {
+                Column(modifier = Modifier.navigationBarsPadding().padding(16.dp)) {
+                    Text(
+                        text = "Choose Artist",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LazyColumn {
+                        items(navigableArtists, key = { it.uri }) { artist ->
+                            val goToArtist = {
+                                onDismiss()
+                                onGoToArtist?.invoke(artist.uri)
+                                Unit
+                            }
+                            Text(
+                                text = artist.name.ifEmpty { "Unknown Artist" },
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusHighlight(onEnterKey = goToArtist)
+                                    .clickable(onClick = goToArtist)
+                                    .padding(vertical = 12.dp),
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
                 }
             }
             SheetView.PlaylistPicker -> {
@@ -131,26 +189,28 @@ fun TrackActionsSheet(
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     LazyColumn {
                         items(playlists, key = { it.uri }) { playlist ->
+                            val addToPlaylist = {
+                                playerViewModel.addToPlaylist(
+                                    playlist.uri,
+                                    trackUri,
+                                ) { result ->
+                                    feedbackText = when (result) {
+                                        is ApiResult.Success ->
+                                            "Added to ${playlist.name.ifEmpty { "playlist" }}"
+                                        is ApiResult.Error ->
+                                            "Error: ${result.message}"
+                                    }
+                                    view = SheetView.Feedback
+                                }
+                            }
                             Text(
                                 text = playlist.name.ifEmpty { "Untitled Playlist" },
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable {
-                                        playerViewModel.addToPlaylist(
-                                            playlist.uri,
-                                            trackUri,
-                                        ) { result ->
-                                            feedbackText = when (result) {
-                                                is ApiResult.Success ->
-                                                    "Added to ${playlist.name.ifEmpty { "playlist" }}"
-                                                is ApiResult.Error ->
-                                                    "Error: ${result.message}"
-                                            }
-                                            view = SheetView.Feedback
-                                        }
-                                    }
+                                    .focusHighlight(onEnterKey = addToPlaylist)
+                                    .clickable(onClick = addToPlaylist)
                                     .padding(vertical = 12.dp),
                             )
                         }

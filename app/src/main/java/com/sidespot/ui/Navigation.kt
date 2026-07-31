@@ -70,12 +70,15 @@ object Routes {
     const val QUEUE = "queue"
     const val SETTINGS = "settings"
     const val SAVED_ALBUMS = "saved_albums"
+    const val SAVED_ARTISTS = "saved_artists"
     const val SAVED_SHOWS = "saved_shows"
     const val NEW_EPISODES = "new_episodes"
     const val HISTORY = "history"
     const val SHOW_DETAIL = "show_detail/{uri}/{name}"
+    const val ARTIST = "artist/{uri}"
 
     fun trackList(uri: String): String = "track_list/${URLEncoder.encode(uri, "UTF-8")}"
+    fun artist(uri: String): String = "artist/${URLEncoder.encode(uri, "UTF-8")}"
     fun showDetail(uri: String, name: String): String =
         "show_detail/${URLEncoder.encode(uri, "UTF-8")}/${URLEncoder.encode(name, "UTF-8")}"
 }
@@ -316,6 +319,9 @@ fun SidespotNavigation(
                             onSavedAlbumsClick = {
                                 navController.navigate(Routes.SAVED_ALBUMS)
                             },
+                            onArtistsClick = {
+                                navController.navigate(Routes.SAVED_ARTISTS)
+                            },
                             onPodcastsClick = {
                                 navController.navigate(Routes.SAVED_SHOWS)
                             },
@@ -336,6 +342,9 @@ fun SidespotNavigation(
                             searchViewModel = searchViewModel,
                             onAlbumClick = { uri ->
                                 navController.navigate(Routes.trackList(uri))
+                            },
+                            onArtistClick = { uri ->
+                                navController.navigate(Routes.artist(uri))
                             },
                             onPlaylistClick = { uri ->
                                 navController.navigate(Routes.trackList(uri))
@@ -363,6 +372,9 @@ fun SidespotNavigation(
                             onGoToAlbum = { albumUri ->
                                 navController.navigate(Routes.trackList(albumUri))
                             },
+                            onGoToArtist = { artistUri ->
+                                navController.navigate(Routes.artist(artistUri))
+                            },
                             onPlayStarted = { showNowPlaying = true },
                         )
                     }
@@ -373,6 +385,9 @@ fun SidespotNavigation(
                             libraryViewModel = libraryViewModel,
                             onGoToAlbum = { albumUri ->
                                 navController.navigate(Routes.trackList(albumUri))
+                            },
+                            onGoToArtist = { artistUri ->
+                                navController.navigate(Routes.artist(artistUri))
                             },
                         )
                     }
@@ -398,6 +413,37 @@ fun SidespotNavigation(
                                 navController.navigate(Routes.trackList(uri))
                             },
                             onBack = { navController.popBackStack() },
+                        )
+                    }
+
+                    composable(Routes.SAVED_ARTISTS) {
+                        SavedArtistsScreen(
+                            libraryViewModel = libraryViewModel,
+                            onArtistClick = { uri ->
+                                navController.navigate(Routes.artist(uri))
+                            },
+                            onBack = { navController.popBackStack() },
+                        )
+                    }
+
+                    composable(
+                        route = Routes.ARTIST,
+                        arguments = listOf(navArgument("uri") { type = NavType.StringType }),
+                    ) { backStackEntry ->
+                        val uri = backStackEntry.arguments?.getString("uri")
+                            ?.let { URLDecoder.decode(it, "UTF-8") } ?: return@composable
+                        ArtistScreen(
+                            artistUri = uri,
+                            playerViewModel = playerViewModel,
+                            libraryViewModel = libraryViewModel,
+                            onBack = { navController.popBackStack() },
+                            onAlbumClick = { albumUri ->
+                                navController.navigate(Routes.trackList(albumUri))
+                            },
+                            onGoToArtist = { otherUri ->
+                                navController.navigate(Routes.artist(otherUri))
+                            },
+                            onPlayStarted = { showNowPlaying = true },
                         )
                     }
 

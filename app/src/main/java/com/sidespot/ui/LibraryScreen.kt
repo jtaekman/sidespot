@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Podcasts
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.RemoveCircleOutline
@@ -70,6 +71,7 @@ fun LibraryScreen(
     onAlbumClick: (uri: String) -> Unit = {},
     onLikedSongsClick: () -> Unit,
     onSavedAlbumsClick: () -> Unit = {},
+    onArtistsClick: () -> Unit = {},
     onPodcastsClick: () -> Unit = {},
     onHistoryClick: () -> Unit = {},
     onSettingsClick: () -> Unit = {},
@@ -210,6 +212,32 @@ fun LibraryScreen(
                         Spacer(modifier = Modifier.width(16.dp))
                         Text(
                             text = "Albums",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                }
+
+                // Artists entry
+                item(contentType = "nav_entry") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusHighlight()
+                            .clickable(onClick = onArtistsClick)
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = null,
+                            modifier = Modifier.size(24.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text(
+                            text = "Artists",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onBackground,
                         )

@@ -4,6 +4,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,6 +28,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -66,6 +69,7 @@ fun QueueScreen(
     playerViewModel: PlayerViewModel,
     libraryViewModel: LibraryViewModel = viewModel(),
     onGoToAlbum: (String) -> Unit = {},
+    onGoToArtist: (String) -> Unit = {},
 ) {
     val playerState by playerViewModel.uiState.collectAsState()
     val queueState by playerViewModel.queueManager.state.collectAsState()
@@ -219,6 +223,11 @@ fun QueueScreen(
         var sheetView by remember { mutableStateOf("actions") }
         var feedbackText by remember { mutableStateOf("") }
 
+        // Podcast episodes carry a placeholder artist with a blank URI.
+        val trackArtists = queueState.trackMetadata[selectedUri]?.artists
+            ?.filter { it.uri.startsWith("spotify:artist:") }
+            ?: emptyList()
+
         if (sheetView == "feedback") {
             LaunchedEffect(feedbackText) {
                 kotlinx.coroutines.delay(1000)
@@ -234,7 +243,13 @@ fun QueueScreen(
         ) {
             when (sheetView) {
                 "actions" -> {
-                    Column(modifier = Modifier.navigationBarsPadding().padding(16.dp)) {
+                    // The action list can outgrow the sheet on short screens, so scroll it.
+                    Column(
+                        modifier = Modifier
+                            .navigationBarsPadding()
+                            .verticalScroll(rememberScrollState())
+                            .padding(16.dp),
+                    ) {
                         QueueSheetActionRow(Icons.Default.RemoveCircleOutline, "Remove from Queue") {
                             selectedQueueIndex?.let {
                                 playerViewModel.queueManager.removeFromQueue(it)
@@ -261,7 +276,46 @@ fun QueueScreen(
                                     onGoToAlbum(albumUri)
                                 }
                             }
+                            if (trackArtists.isNotEmpty()) {
+                                QueueSheetActionRow(Icons.Default.Person, "Go to Artist") {
+                                    if (trackArtists.size == 1) {
+                                        selectedQueueIndex = null
+                                        onGoToArtist(trackArtists[0].uri)
+                                    } else {
+                                        sheetView = "artists"
+                                    }
+                                }
+                            }
                         }
+                    }
+                }
+                "artists" -> {
+                    Column(modifier = Modifier.navigationBarsPadding().padding(16.dp)) {
+                        Text(
+                            text = "Choose Artist",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        LazyColumn {
+                            items(trackArtists, key = { it.uri }) { artist ->
+                                val goToArtist = {
+                                    selectedQueueIndex = null
+                                    onGoToArtist(artist.uri)
+                                }
+                                Text(
+                                    text = artist.name.ifEmpty { "Unknown Artist" },
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .focusHighlight(onEnterKey = goToArtist)
+                                        .clickable(onClick = goToArtist)
+                                        .padding(vertical = 12.dp),
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(16.dp))
                     }
                 }
                 "playlists" -> {

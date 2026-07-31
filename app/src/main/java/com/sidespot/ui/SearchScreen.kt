@@ -71,6 +71,7 @@ fun SearchScreen(
     libraryViewModel: LibraryViewModel = viewModel(),
     searchViewModel: SearchViewModel = viewModel(),
     onAlbumClick: (String) -> Unit = {},
+    onArtistClick: (String) -> Unit = {},
     onPlaylistClick: (String) -> Unit = {},
     onShowClick: (String) -> Unit = {},
 ) {
@@ -332,6 +333,8 @@ fun SearchScreen(
             onGoToAlbum = if (selectedTrack != null) {
                 { onAlbumClick(selectedTrack.albumUri) }
             } else null,
+            artists = selectedTrack?.artists.orEmpty(),
+            onGoToArtist = onArtistClick,
         )
     }
 
