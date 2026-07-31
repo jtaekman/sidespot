@@ -61,7 +61,7 @@ Additional adaptations when a Sundial is detected:
 
 ### From Releases
 
-Download the latest APK from [Releases](https://codeberg.org/jtaekman/sidespot/releases) and sideload it onto your device:
+Download the latest APK from [Releases](https://github.com/jtaekman/sidespot/releases) and sideload it onto your device:
 
 ```sh
 adb install sidespot-v*.apk
@@ -72,7 +72,7 @@ adb install sidespot-v*.apk
 To track updates automatically via [Obtainium](https://github.com/ImranR98/Obtainium):
 
 1. Open Obtainium
-2. Add app -> enter the repository URL: `https://codeberg.org/jtaekman/sidespot`
+2. Add app -> enter the repository URL: `https://github.com/jtaekman/sidespot`
 3. Obtainium will check for new releases and notify you when updates are available
 
 ## Build from Source
@@ -91,7 +91,7 @@ To track updates automatically via [Obtainium](https://github.com/ImranR98/Obtai
 rustup target add aarch64-linux-android
 
 # Clone with submodules (librespot)
-git clone --recurse-submodules https://codeberg.org/jtaekman/sidespot.git
+git clone --recurse-submodules https://github.com/jtaekman/sidespot.git
 cd sidespot
 ```
 
