@@ -45,6 +45,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import android.view.InputDevice
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
@@ -174,6 +175,18 @@ fun TrackListScreen(
             }
         }
         val listState = rememberLazyListState()
+
+        // Focusing the final row only scrolls it just into view, which leaves the
+        // "N tracks, N min" footer below the fold.  Scroll to the end instead —
+        // animateScrollToItem clamps at the content bottom, so the footer lands
+        // on screen.  Driven off state (not straight from onFocusChanged) so the
+        // scroll starts after the focusable's own bring-into-view request.
+        var lastRowFocused by remember { mutableStateOf(false) }
+        LaunchedEffect(lastRowFocused) {
+            if (lastRowFocused) {
+                listState.animateScrollToItem(listState.layoutInfo.totalItemsCount - 1)
+            }
+        }
 
         // Pull in the next page of track metadata as the user nears the end.
         LaunchedEffect(listState) {
@@ -472,6 +485,11 @@ fun TrackListScreen(
                     index = index + 1,
                     track = track,
                     showAlbumArt = !state.isAlbum,
+                    modifier = if (index == state.tracks.lastIndex) {
+                        Modifier.onFocusChanged { lastRowFocused = it.isFocused }
+                    } else {
+                        Modifier
+                    },
                     onClick = {
                         // Tracks whose metadata failed to resolve are skipped, so the
                         // row index can drift from the position in trackUris.

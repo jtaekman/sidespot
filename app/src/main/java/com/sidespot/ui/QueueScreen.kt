@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -51,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
@@ -85,7 +87,22 @@ fun QueueScreen(
         queueState.contextTracks.drop(queueState.contextIndex + 1)
     }
 
+    val listState = rememberLazyListState()
+
+    // Focusing the final row only scrolls it just into view, which leaves the
+    // "...and N more" footer below the fold.  Scroll to the end instead —
+    // animateScrollToItem clamps at the content bottom, so the footer lands on
+    // screen.  Driven off state (not straight from onFocusChanged) so the scroll
+    // starts after the focusable's own bring-into-view request.
+    var lastRowFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(lastRowFocused) {
+        if (lastRowFocused) {
+            listState.animateScrollToItem(listState.layoutInfo.totalItemsCount - 1)
+        }
+    }
+
     LazyColumn(
+        state = listState,
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 16.dp),
@@ -179,6 +196,13 @@ fun QueueScreen(
             val absoluteIndex = queueState.contextIndex + 1 + index
             Box(
                 modifier = Modifier
+                    .then(
+                        if (index == displayUpcoming.lastIndex) {
+                            Modifier.onFocusChanged { lastRowFocused = it.isFocused }
+                        } else {
+                            Modifier
+                        },
+                    )
                     .focusHighlight()
                     .clickable {
                         playerViewModel.skipToQueueItem(isUserQueue = false, index = absoluteIndex)

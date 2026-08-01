@@ -13,7 +13,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.sidespot.auth.AuthManager
 import com.sidespot.bridge.NativeBridge
 import com.sidespot.settings.SettingsManager
-import com.sidespot.ui.Routes
 import com.sidespot.ui.SidespotNavigation
 import com.sidespot.ui.SidespotTheme
 import com.sidespot.viewmodel.PlayerViewModel
@@ -25,7 +24,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var authManager: AuthManager
     private lateinit var settingsManager: SettingsManager
 
-    var currentRoute: String? = null
+    /** Now Playing is a full-screen overlay, not a NavHost destination, so its
+     *  visibility can't be derived from the nav back stack — the UI syncs it here. */
+    var isNowPlayingVisible: Boolean = false
+
     var onNowPlayingToggleRequested: (() -> Unit)? = null
     var onTabCycleRequested: (() -> Unit)? = null
 
@@ -149,7 +151,7 @@ class MainActivity : ComponentActivity() {
 
         // Center button: Play/Pause on Now Playing; short press = select, long press = row actions elsewhere
         if (event.keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
-            if (currentRoute == Routes.NOW_PLAYING) {
+            if (isNowPlayingVisible) {
                 if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                     val vm = playerViewModel ?: return true
                     if (vm.uiState.value.isPlaying) vm.pause() else vm.play()
@@ -206,11 +208,11 @@ class MainActivity : ComponentActivity() {
 
             // D-pad up/down — volume on Now Playing, focus traversal elsewhere
             KeyEvent.KEYCODE_DPAD_UP -> {
-                if (currentRoute == Routes.NOW_PLAYING) adjustVolume(up = true)
+                if (isNowPlayingVisible) adjustVolume(up = true)
                 else super.onKeyDown(keyCode, event)
             }
             KeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (currentRoute == Routes.NOW_PLAYING) adjustVolume(up = false)
+                if (isNowPlayingVisible) adjustVolume(up = false)
                 else super.onKeyDown(keyCode, event)
             }
 

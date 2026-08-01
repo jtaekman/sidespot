@@ -37,6 +37,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -179,9 +180,14 @@ fun SidespotNavigation(
         }
     }
 
-    // Sync currentRoute to activity for context-sensitive key handling
+    // Sync Now Playing overlay visibility to the activity so the sundial centre
+    // button maps to play/pause instead of re-selecting the focused row behind it
+    DisposableEffect(mainActivity, showNowPlaying) {
+        mainActivity?.isNowPlayingVisible = showNowPlaying
+        onDispose { mainActivity?.isNowPlayingVisible = false }
+    }
+
     LaunchedEffect(currentRoute) {
-        mainActivity?.currentRoute = currentRoute
         if (currentRoute == Routes.LIBRARY) {
             libraryViewModel.refreshLibrary()
         }
@@ -534,6 +540,9 @@ private fun BottomNavBar(
         bottomNavItems.forEach { item ->
             val selected = currentRoute == item.route
             NavigationBarItem(
+                // Not reachable by D-pad — pressing down at the end of a list must
+                // stay in the content.  The sundial's top-left button cycles tabs.
+                modifier = Modifier.focusProperties { canFocus = false },
                 selected = selected,
                 onClick = {
                     navController.navigate(item.route) {
