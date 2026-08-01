@@ -235,16 +235,10 @@ fun TrackListScreen(
                 }
             }
 
-            // Track count + Play All
+            // Play All
             if (state.trackUris.isNotEmpty()) {
                 item(contentType = "controls") {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "${state.trackUris.size} tracks",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
                     if (hasDpad) {
                         val playAllFocus = remember { FocusRequester() }
                         LaunchedEffect(Unit) { playAllFocus.requestFocus() }
@@ -512,6 +506,24 @@ fun TrackListScreen(
                     }
                 }
             }
+
+            // Footer: doubles as the "that's every track" marker, so it only
+            // appears once every page of metadata has been resolved.
+            if (state.trackUris.isNotEmpty() && !state.hasMoreTracks && !state.isLoading) {
+                item(contentType = "footer") {
+                    val count = state.trackUris.size
+                    val runtime = formatTotalDuration(
+                        state.tracks.sumOf { it.durationMs.toLong() },
+                    )
+                    val label = "$count ${if (count == 1) "track" else "tracks"}"
+                    Text(
+                        text = if (runtime != null) "$label, $runtime" else label,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 12.dp, bottom = 24.dp),
+                    )
+                }
+            }
         }
     }
 
@@ -532,6 +544,20 @@ fun TrackListScreen(
             artists = selectedTrack?.artists.orEmpty(),
             onGoToArtist = onGoToArtist,
         )
+    }
+}
+
+/** Total runtime in Spotify's style: "1 hr 12 min" for long lists, "48 min 33 sec" otherwise. */
+private fun formatTotalDuration(totalMs: Long): String? {
+    if (totalMs <= 0) return null
+    val totalSeconds = totalMs / 1000
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return when {
+        hours > 0 -> "$hours hr $minutes min"
+        minutes > 0 -> "$minutes min $seconds sec"
+        else -> "$seconds sec"
     }
 }
 
