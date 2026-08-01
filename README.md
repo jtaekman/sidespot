@@ -19,9 +19,10 @@ Built on [librespot](https://github.com/librespot-org/librespot) (Rust) with a m
 - **No Google Play Services required** -- runs on degoogled and minimal Android devices
 - **Optimized for small screens** -- dark theme, 48dp+ touch targets, designed for 2.8" displays
 - **Full playback** -- play, pause, seek, skip, shuffle, repeat, queue management
-- **Library browsing** -- playlists, liked songs, saved albums, saved podcasts, sorted by recently played with album art thumbnails
+- **Library browsing** -- playlists, liked songs, saved albums, followed artists, saved podcasts, sorted by recently played with album art thumbnails
 - **Library management** -- save/remove albums, playlists, and podcasts directly from the app; add tracks to liked songs or any writable playlist; create new playlists
-- **Search** -- find tracks, albums, playlists, and podcasts
+- **Search** -- find tracks, artists, albums, playlists, and podcasts
+- **Artist pages** -- browse followed artists, view an artist's popular tracks, and jump straight to the artist from any track
 - **Podcast support** -- browse saved shows, view episode lists, play episodes, dedicated New Episodes screen across all subscribed shows
 - **Background playback** -- foreground service with media notification controls
 - **Dynamic theming** -- album art colors tint the entire UI with smooth animated transitions
