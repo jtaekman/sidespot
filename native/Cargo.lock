@@ -2250,8 +2250,10 @@ version = "0.1.0"
 dependencies = [
  "android_logger",
  "bytes",
+ "http-body-util",
  "hyper",
  "jni",
+ "librespot-audio",
  "librespot-core",
  "librespot-metadata",
  "librespot-oauth",

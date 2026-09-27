@@ -79,7 +79,7 @@ fun HistoryScreen(
             .padding(horizontal = 16.dp)
             .focusProperties {
                 enter = {
-                    if (firstItemFocusReady) firstItemFocus
+                    if (firstItemFocusReady && !isRestoringIndicatorFocus) firstItemFocus
                     else FocusRequester.Default
                 }
             }

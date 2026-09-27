@@ -8,6 +8,7 @@ mod bridge;
 mod error;
 mod library;
 mod metadata;
+mod offline;
 mod player;
 mod session;
 

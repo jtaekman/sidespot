@@ -144,7 +144,7 @@ pub struct SearchResults {
 
 /// Construct a Spotify CDN image URL from a librespot FileId.
 /// Prefers the largest available image.
-fn image_url_from_images(images: &librespot_metadata::image::Images) -> Option<String> {
+pub(crate) fn image_url_from_images(images: &librespot_metadata::image::Images) -> Option<String> {
     // Prefer larger images: Large > Medium > Small > XLarge (XLarge is sometimes a different format)
     let preferred_order = [ImageSize::LARGE, ImageSize::DEFAULT, ImageSize::SMALL];
 
@@ -163,13 +163,24 @@ fn image_url_from_images(images: &librespot_metadata::image::Images) -> Option<S
 // Public async functions
 // ---------------------------------------------------------------------------
 
-/// Fetch full track metadata.
+/// Fetch full track metadata. Downloaded tracks are answered from the offline
+/// store, which works without a connection and points at the saved cover art.
 pub async fn get_track_info(uri: &str) -> Result<String> {
+    if let Some(info) = crate::offline::stored_track_info(uri) {
+        return Ok(serde_json::to_string(&info)?);
+    }
+
     let session = session::get_session().await?;
     let spotify_uri = SpotifyUri::from_uri(uri)
         .map_err(|e| SidespotError::Player(format!("invalid URI '{uri}': {e}")))?;
 
-    let track = Track::get(&session, &spotify_uri)
+    let info = fetch_track_info(&session, &spotify_uri).await?;
+    Ok(serde_json::to_string(&info)?)
+}
+
+/// Fetch a track's metadata from Spotify.
+pub(crate) async fn fetch_track_info(session: &Session, uri: &SpotifyUri) -> Result<TrackInfo> {
+    let track = Track::get(session, uri)
         .await
         .map_err(|e| SidespotError::Player(format!("failed to get track metadata: {e}")))?;
 
@@ -184,7 +195,7 @@ pub async fn get_track_info(uri: &str) -> Result<String> {
 
     let album_art_url = image_url_from_images(&track.album.covers);
 
-    let info = TrackInfo {
+    Ok(TrackInfo {
         uri: track.id.to_uri(),
         name: track.name.clone(),
         artists,
@@ -195,9 +206,7 @@ pub async fn get_track_info(uri: &str) -> Result<String> {
         track_number: track.number,
         disc_number: track.disc_number,
         is_explicit: track.is_explicit,
-    };
-
-    Ok(serde_json::to_string(&info)?)
+    })
 }
 
 /// Top tracks shown on the artist page.

@@ -115,6 +115,8 @@ pub async fn create_player() -> Result<()> {
     let mut config = PlayerConfig::default();
     // Enable position updates every second for the seek bar
     config.position_update_interval = Some(std::time::Duration::from_secs(1));
+    // Play downloaded copies whenever they exist, online or not
+    config.offline_source = Some(crate::offline::OfflineStore::source());
 
     // Apply stored app config
     {

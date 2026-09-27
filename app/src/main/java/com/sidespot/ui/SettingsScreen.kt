@@ -14,6 +14,7 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -25,7 +26,9 @@ import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.sidespot.auth.AuthManager
+import com.sidespot.offline.DownloadManager
 import com.sidespot.settings.AudioQuality
 import com.sidespot.settings.SettingsManager
 import com.sidespot.viewmodel.PlayerViewModel
@@ -49,6 +53,11 @@ fun SettingsScreen(
     onSignOut: () -> Unit,
 ) {
     val settings by settingsManager.state.collectAsState()
+    val downloadManager = remember { DownloadManager.get() }
+    val downloads by downloadManager.state.collectAsState()
+    var showRemoveDownloadsDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) { downloadManager.refreshStorageUsed() }
 
     // Draft state for audio settings (only persisted on Save)
     var draftNormalization by remember(settings.normalization) {
@@ -263,6 +272,72 @@ fun SettingsScreen(
         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
         Spacer(modifier = Modifier.height(24.dp))
 
+        // --- Downloads section ---
+        Text(
+            text = "Downloads",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Text(
+            text = "Downloads use the streaming quality set above",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Download over cellular toggle
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Download Over Cellular",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                Text(
+                    text = "Otherwise downloads wait for Wi-Fi",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = settings.downloadOverCellular,
+                onCheckedChange = { settingsManager.setDownloadOverCellular(it) },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = MaterialTheme.colorScheme.primary,
+                    checkedTrackColor = MaterialTheme.colorScheme.primaryContainer,
+                ),
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = downloadStatusText(downloads),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Button(
+            onClick = { showRemoveDownloadsDialog = true },
+            enabled = downloads.collections.isNotEmpty() || downloads.storageBytes > 0,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.secondary,
+            ),
+        ) {
+            Text("Remove All Downloads")
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+        Spacer(modifier = Modifier.height(24.dp))
+
         // --- Display section ---
         Text(
             text = "Display",
@@ -318,5 +393,26 @@ fun SettingsScreen(
         }
 
         Spacer(modifier = Modifier.height(32.dp))
+    }
+
+    if (showRemoveDownloadsDialog) {
+        AlertDialog(
+            onDismissRequest = { showRemoveDownloadsDialog = false },
+            title = { Text("Remove all downloads?") },
+            text = { Text("Nothing will be available offline until you download it again.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    downloadManager.removeAll()
+                    showRemoveDownloadsDialog = false
+                }) {
+                    Text("Remove")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRemoveDownloadsDialog = false }) {
+                    Text("Cancel")
+                }
+            },
+        )
     }
 }

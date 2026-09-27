@@ -25,16 +25,33 @@ Built on [librespot](https://github.com/librespot-org/librespot) (Rust) with a m
 - **Artist pages** -- browse followed artists, view an artist's popular tracks, and jump straight to the artist from any track
 - **Podcast support** -- browse saved shows, view episode lists, play episodes, dedicated New Episodes screen across all subscribed shows
 - **Background playback** -- foreground service with media notification controls
-- **Dynamic theming** -- album art colors tint the entire UI with smooth animated transitions
+- **Offline mode** -- download albums, playlists, Liked Songs, and podcast episodes to listen without a connection; downloaded collections stay in sync as they change, and downloads wait for Wi-Fi unless cellular is allowed in Settings
 - **Hardware volume keys** -- physical button integration
 - **Audio focus** -- pauses for calls, ducks for notifications, resumes automatically
 - **Play history** -- dedicated History view combining local Sidespot listening history with your official Spotify history (note: playback through Sidespot does not appear in your official Spotify history)
 - **E-ink display mode** -- high-contrast monochrome UI optimized for e-ink screens
-- **Settings** -- audio quality (160/320 kbps), volume normalization, gapless playback, autoplay, e-ink mode
+- **Settings** -- audio quality (160/320 kbps), volume normalization, gapless playback, autoplay, downloads over cellular, e-ink mode
 
 ## Sidephone Only Features
 
-When a Sundial keypad is connected, sidespot enables full hardware navigation -- no touchscreen needed (with the exception of shuffle/loop buttons in Now Playing).
+Sidespot can be driven entirely from a Sidephone keypad. It tells the Sundial apart from D-pad keypads by the keys they send, so the controls switch over by themselves when you swap tiles (the first press of a Sundial-only key -- centre glass, dial left/right or Tab -- or of the D-pad centre key settles it).
+
+### Classic keypad (and other D-pad keypads)
+
+Standard D-pad navigation -- no touchscreen needed.
+
+| Control | Action |
+|---------|--------|
+| **Up / Down** | Move through lists |
+| **Left / Right** | Move between side-by-side buttons (e.g. the Now Playing controls). With nothing further that way: switch to the neighbouring tab (Queue / Library / Search), or go back on other screens (Left) |
+| **Center** | Select the focused item; hold for row actions (add to queue, liked songs, playlist) |
+| **Backspace** | Navigate back / dismiss menus (when not typing) |
+
+On Now Playing, focus starts on play/pause and the arrows move between the back, shuffle, previous, play/pause, next and repeat buttons; focus returns to the row you came from when it closes. Use the side volume keys for volume. On the Mini Controller, A and Start also select.
+
+### Sundial keypad
+
+Full hardware navigation -- no touchscreen needed (with the exception of shuffle/loop buttons in Now Playing).
 
 | Control | Action |
 |---------|--------|
@@ -47,7 +64,7 @@ When a Sundial keypad is connected, sidespot enables full hardware navigation --
 | **Bottom-left (Tab)** | Show / hide Now Playing |
 | **Bottom-right (Enter)** | Open row actions (add to queue, liked songs, playlist) |
 
-Additional adaptations when a Sundial is detected:
+Additional adaptations for keypad use:
 - **Fill-style focus indicators** on all interactive items
 - **Stacked Play All / Shuffle buttons** in playlist and album views for easy D-pad access
 - **Auto-focus on first content row** when entering any list view
@@ -168,7 +185,6 @@ keyPassword=your-key-password
 - **No lossless/HiFi** -- max quality is 320 kbps OGG Vorbis. Spotify's lossless tier uses DRM that librespot cannot and will not circumvent
 - **No Spotify Connect** -- the device does not appear as a Spotify Connect target
 - **No crossfade** -- crossfade between tracks is not supported
-- **No offline mode** -- streaming only, no download/cache for offline listening
 - **Account risk** -- Spotify has not sanctioned third-party clients. Use at your own risk
 
 ## Disclaimer

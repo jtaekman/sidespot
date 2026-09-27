@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, Mutex as StdMutex};
 
 use librespot_core::SessionConfig;
@@ -17,6 +18,10 @@ static SESSION: OnceLock<Arc<Mutex<Option<Session>>>> = OnceLock::new();
 
 /// Custom tmp dir set from Android (app cache dir).
 static TMP_DIR: OnceLock<StdMutex<Option<PathBuf>>> = OnceLock::new();
+
+/// Whether the stored session was created by [`start_offline`] and has not
+/// connected yet.
+static OFFLINE: AtomicBool = AtomicBool::new(false);
 
 /// Set the temporary directory for librespot file downloads.
 pub fn set_tmp_dir(path: &str) {
@@ -44,9 +49,7 @@ fn session_slot() -> &'static Arc<Mutex<Option<Session>>> {
     SESSION.get_or_init(|| Arc::new(Mutex::new(None)))
 }
 
-/// Connect to Spotify with the given access token.
-/// Returns Ok(()) on success, stores the session globally.
-pub async fn connect_with_token(access_token: &str) -> Result<()> {
+fn session_config() -> SessionConfig {
     let mut config = SessionConfig::default();
     if let Some(tmp) = get_tmp_dir() {
         config.tmp_dir = tmp;
@@ -60,9 +63,28 @@ pub async fn connect_with_token(access_token: &str) -> Result<()> {
         }
     }
 
+    config
+}
+
+/// Connect to Spotify with the given access token.
+/// Returns Ok(()) on success, stores the session globally.
+pub async fn connect_with_token(access_token: &str) -> Result<()> {
     let credentials = Credentials::with_access_token(access_token);
 
-    let session = Session::new(config, None);
+    // The player holds on to the offline session, so connect that one in place
+    // instead of replacing it. Downloaded tracks keep playing throughout.
+    if OFFLINE.load(Ordering::Acquire) {
+        let session = get_session().await?;
+        session
+            .connect(credentials, true)
+            .await
+            .map_err(|e| SidespotError::Session(format!("connect failed: {e}")))?;
+        OFFLINE.store(false, Ordering::Release);
+        log::info!("Offline session connected to Spotify");
+        return Ok(());
+    }
+
+    let session = Session::new(session_config(), None);
 
     session
         .connect(credentials, true)
@@ -77,6 +99,25 @@ pub async fn connect_with_token(access_token: &str) -> Result<()> {
     Ok(())
 }
 
+/// Create a session without connecting it, so the player can be created and
+/// play downloaded tracks while there is no network. A later
+/// [`connect_with_token`] connects this same session.
+pub async fn start_offline() -> Result<()> {
+    let mut slot = session_slot().lock().await;
+    if slot.is_some() {
+        return Ok(());
+    }
+    *slot = Some(Session::new(session_config(), None));
+    OFFLINE.store(true, Ordering::Release);
+    log::info!("Started offline session");
+    Ok(())
+}
+
+/// Whether the current session was started offline and has not connected yet.
+pub fn is_offline() -> bool {
+    OFFLINE.load(Ordering::Acquire)
+}
+
 /// Disconnect the current session.
 pub async fn disconnect() {
     let mut slot = session_slot().lock().await;
@@ -84,6 +125,7 @@ pub async fn disconnect() {
         session.shutdown();
         log::info!("Spotify session disconnected");
     }
+    OFFLINE.store(false, Ordering::Release);
 }
 
 /// Get a clone of the current session, if connected.
@@ -95,5 +137,5 @@ pub async fn get_session() -> Result<Session> {
 /// Check if a session is currently active.
 pub async fn is_connected() -> bool {
     let slot = session_slot().lock().await;
-    slot.is_some()
+    slot.as_ref().is_some_and(|session| !session.is_invalid()) && !is_offline()
 }

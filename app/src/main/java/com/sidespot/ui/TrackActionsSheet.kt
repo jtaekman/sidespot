@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.QueueMusic
+import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -61,6 +62,7 @@ fun TrackActionsSheet(
     onGoToAlbum: (() -> Unit)? = null,
     artists: List<ArtistSummary> = emptyList(),
     onGoToArtist: ((String) -> Unit)? = null,
+    onRemoveDownload: (() -> Unit)? = null,
 ) {
     var view by remember { mutableStateOf(SheetView.Actions) }
     var feedbackText by remember { mutableStateOf("") }
@@ -99,13 +101,16 @@ fun TrackActionsSheet(
                         feedbackText = "Added to Queue"
                         view = SheetView.Feedback
                     }
-                    SheetActionRow(Icons.Default.Favorite, "Add to Liked Songs") {
-                        playerViewModel.addToLikedSongs(trackUri) { result ->
-                            feedbackText = when (result) {
-                                is ApiResult.Success -> "Added to Liked Songs"
-                                is ApiResult.Error -> "Error: ${result.message}"
+                    // Episodes can't be liked.
+                    if (!trackUri.startsWith("spotify:episode:")) {
+                        SheetActionRow(Icons.Default.Favorite, "Add to Liked Songs") {
+                            playerViewModel.addToLikedSongs(trackUri) { result ->
+                                feedbackText = when (result) {
+                                    is ApiResult.Success -> "Added to Liked Songs"
+                                    is ApiResult.Error -> "Error: ${result.message}"
+                                }
+                                view = SheetView.Feedback
                             }
-                            view = SheetView.Feedback
                         }
                     }
                     SheetActionRow(Icons.Default.Add, "Add to Playlist...") {
@@ -125,6 +130,13 @@ fun TrackActionsSheet(
                             } else {
                                 view = SheetView.ArtistPicker
                             }
+                        }
+                    }
+                    if (onRemoveDownload != null) {
+                        SheetActionRow(Icons.Default.RemoveCircleOutline, "Remove Download") {
+                            onRemoveDownload()
+                            feedbackText = "Download Removed"
+                            view = SheetView.Feedback
                         }
                     }
                 }
@@ -296,7 +308,7 @@ fun TrackActionsSheet(
 }
 
 @Composable
-private fun SheetActionRow(
+internal fun SheetActionRow(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     text: String,
     onClick: () -> Unit,

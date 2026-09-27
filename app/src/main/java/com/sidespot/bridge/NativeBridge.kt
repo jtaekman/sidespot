@@ -46,6 +46,13 @@ object NativeBridge {
     /** Check if a session is currently connected. */
     external fun sessionIsConnected(): Boolean
 
+    /**
+     * Create a session without connecting, so the player can play downloads while
+     * there is no network. A later [sessionConnect] connects this same session.
+     * @return null on success, or an error message string on failure.
+     */
+    external fun sessionStartOffline(): String?
+
     // -- Audio callback registration --
 
     /**
@@ -179,6 +186,29 @@ object NativeBridge {
 
     /** Get episodes for a show. Returns JSON array of episode summaries. */
     external fun metadataGetShowEpisodes(showUri: String): String?
+
+    // -- Offline downloads --
+
+    /** Set the directory downloads are stored in. Must be called before playerCreate. */
+    external fun setOfflineDir(path: String)
+
+    /**
+     * Download a track or episode for offline playback. Blocks until done.
+     * @return TrackInfo JSON on success, or {"error": ..., "permanent": bool}.
+     */
+    external fun offlineDownload(uri: String): String?
+
+    /** Delete the downloads for a JSON array of URIs. */
+    external fun offlineRemove(urisJson: String)
+
+    /** URIs of every downloaded track and episode, as a JSON array. */
+    external fun offlineList(): String?
+
+    /** Stored TrackInfo for whichever URIs in a JSON array are downloaded, as a JSON array. */
+    external fun offlineTrackInfos(urisJson: String): String?
+
+    /** Bytes used by downloads. */
+    external fun offlineStorageBytes(): Long
 
     // -- Convenience --
 

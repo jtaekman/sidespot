@@ -4,9 +4,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -29,8 +31,26 @@ private val SidespotColorScheme = darkColorScheme(
     onError = Color.Black,
 )
 
+val LocalEinkMode = compositionLocalOf { false }
+
+private val EinkColorScheme = lightColorScheme(
+    background = Color.White,
+    surface = Color.White,
+    surfaceVariant = Color(0xFFE0E0E0),
+    onBackground = Color.Black,
+    onSurface = Color.Black,
+    primary = Color.Black,
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFF444444),
+    secondary = Color(0xFF444444),
+    onSecondary = Color.White,
+    onSurfaceVariant = Color(0xFF444444),
+    error = Color(0xFF8B0000),
+    onError = Color.White,
+)
+
 // Typography optimized for 480x640 (2.8") display
-internal val SidespotTypography = Typography(
+private val SidespotTypography = Typography(
     headlineLarge = TextStyle(
         fontSize = 22.sp,
         fontWeight = FontWeight.Bold,
@@ -70,10 +90,16 @@ internal val SidespotTypography = Typography(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SidespotTheme(content: @Composable () -> Unit) {
-    CompositionLocalProvider(LocalRippleConfiguration provides null) {
+fun SidespotTheme(
+    einkMode: Boolean = false,
+    content: @Composable () -> Unit,
+) {
+    CompositionLocalProvider(
+        LocalRippleConfiguration provides null,
+        LocalEinkMode provides einkMode,
+    ) {
         MaterialTheme(
-            colorScheme = SidespotColorScheme,
+            colorScheme = if (einkMode) EinkColorScheme else SidespotColorScheme,
             typography = SidespotTypography,
             content = content,
         )

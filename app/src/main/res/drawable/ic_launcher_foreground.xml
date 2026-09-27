@@ -1,11 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Simple music note icon as placeholder -->
-    <path
-        android:fillColor="#1DB954"
-        android:pathData="M54,27 L54,63 C52.5,62.4 50.8,62 49,62 C44.6,62 41,65.6 41,70 C41,74.4 44.6,78 49,78 C53.4,78 57,74.4 57,70 L57,39 L67,36 L67,33 Z" />
+    <!-- Single eighth note.  Stacked, offset copies below it make a soft drop shadow. -->
+    <group android:translateY="1.6">
+        <path
+            android:fillColor="#0F7A0018"
+            android:pathData="M35.98,75.48 A11.77,8.77 -24 1,1 57.49,65.90 A11.77,8.77 -24 1,1 35.98,75.48 Z M51.22,68.66 L51.22,30.03 C51.22,29.07 51.97,28.32 52.93,28.32 L58.07,28.32 L58.07,68.66 Z M58.07,28.32 C59.14,35.38 66.41,39.23 71.12,44.58 C75.61,49.72 76.47,56.57 73.26,63.42 C72.51,65.02 70.05,64.59 70.48,62.77 C71.87,57.00 70.37,52.50 66.20,49.51 C63.63,47.69 60.85,47.05 58.07,46.83 Z" />
+    </group>
+    <group android:translateY="1.1">
+        <path
+            android:fillColor="#127A0018"
+            android:pathData="M35.98,75.48 A11.77,8.77 -24 1,1 57.49,65.90 A11.77,8.77 -24 1,1 35.98,75.48 Z M51.22,68.66 L51.22,30.03 C51.22,29.07 51.97,28.32 52.93,28.32 L58.07,28.32 L58.07,68.66 Z M58.07,28.32 C59.14,35.38 66.41,39.23 71.12,44.58 C75.61,49.72 76.47,56.57 73.26,63.42 C72.51,65.02 70.05,64.59 70.48,62.77 C71.87,57.00 70.37,52.50 66.20,49.51 C63.63,47.69 60.85,47.05 58.07,46.83 Z" />
+    </group>
+    <group android:translateY="0.6">
+        <path
+            android:fillColor="#147A0018"
+            android:pathData="M35.98,75.48 A11.77,8.77 -24 1,1 57.49,65.90 A11.77,8.77 -24 1,1 35.98,75.48 Z M51.22,68.66 L51.22,30.03 C51.22,29.07 51.97,28.32 52.93,28.32 L58.07,28.32 L58.07,68.66 Z M58.07,28.32 C59.14,35.38 66.41,39.23 71.12,44.58 C75.61,49.72 76.47,56.57 73.26,63.42 C72.51,65.02 70.05,64.59 70.48,62.77 C71.87,57.00 70.37,52.50 66.20,49.51 C63.63,47.69 60.85,47.05 58.07,46.83 Z" />
+    </group>
+    <path android:pathData="M35.98,75.48 A11.77,8.77 -24 1,1 57.49,65.90 A11.77,8.77 -24 1,1 35.98,75.48 Z M51.22,68.66 L51.22,30.03 C51.22,29.07 51.97,28.32 52.93,28.32 L58.07,28.32 L58.07,68.66 Z M58.07,28.32 C59.14,35.38 66.41,39.23 71.12,44.58 C75.61,49.72 76.47,56.57 73.26,63.42 C72.51,65.02 70.05,64.59 70.48,62.77 C71.87,57.00 70.37,52.50 66.20,49.51 C63.63,47.69 60.85,47.05 58.07,46.83 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54"
+                android:startY="28.32"
+                android:endX="54"
+                android:endY="79.68"
+                android:startColor="#FFFFFFFF"
+                android:endColor="#FFFCEFF2" />
+        </aapt:attr>
+    </path>
 </vector>

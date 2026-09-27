@@ -52,6 +52,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -151,6 +154,9 @@ fun NowPlayingScreen(
                 if (einkMode) Modifier.background(MaterialTheme.colorScheme.background)
                 else Modifier
             )
+            // A touch-only target: as a focusable it would swallow D-pad focus
+            // search, leaving the controls inside it unreachable.
+            .focusProperties { canFocus = false }
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -316,7 +322,7 @@ private fun NowPlayingControls(
         ) {
             IconButton(
                 onClick = onBack,
-                modifier = Modifier.size(40.dp),
+                modifier = Modifier.size(40.dp).focusCircle(),
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -561,6 +567,18 @@ private fun TransportControls(
     val buttonBg = if (einkMode) controlColor else Color.White
     val buttonFg = if (einkMode) MaterialTheme.colorScheme.onPrimary else Color.Black
 
+    // On D-pad keypads, start focus on play/pause so the centre key toggles
+    // playback and the arrows reach the other controls.  The Sundial's keys all
+    // have fixed roles on Now Playing, so focus stays on the screen underneath.
+    val playPauseFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        if (Keypad.isSundial) return@LaunchedEffect
+        try {
+            playPauseFocus.requestFocus()
+        } catch (_: IllegalStateException) {
+        }
+    }
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceEvenly,
@@ -570,7 +588,7 @@ private fun TransportControls(
         if (!isAutoplay) {
             IconButton(
                 onClick = onToggleShuffle,
-                modifier = Modifier.size(48.dp),
+                modifier = Modifier.size(48.dp).focusCircle(),
             ) {
                 Icon(
                     imageVector = Icons.Default.Shuffle,
@@ -587,7 +605,7 @@ private fun TransportControls(
         // Previous
         IconButton(
             onClick = onPrevious,
-            modifier = Modifier.size(56.dp),
+            modifier = Modifier.size(56.dp).focusCircle(),
         ) {
             Icon(
                 imageVector = Icons.Default.SkipPrevious,
@@ -605,7 +623,9 @@ private fun TransportControls(
                 .background(
                     color = buttonBg,
                     shape = CircleShape,
-                ),
+                )
+                .focusRequester(playPauseFocus)
+                .focusCircle(),
         ) {
             if (isLoading) {
                 CircularProgressIndicator(
@@ -626,7 +646,7 @@ private fun TransportControls(
         // Next
         IconButton(
             onClick = onNext,
-            modifier = Modifier.size(56.dp),
+            modifier = Modifier.size(56.dp).focusCircle(),
         ) {
             Icon(
                 imageVector = Icons.Default.SkipNext,
@@ -639,7 +659,7 @@ private fun TransportControls(
         // Repeat
         IconButton(
             onClick = onCycleRepeat,
-            modifier = Modifier.size(48.dp),
+            modifier = Modifier.size(48.dp).focusCircle(),
         ) {
             Icon(
                 imageVector = when (repeatMode) {

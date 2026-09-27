@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use jni::JNIEnv;
 use jni::objects::{JClass, JObject, JString};
-use jni::sys::{jboolean, jint, jstring, JNI_TRUE, JNI_FALSE};
+use jni::sys::{jboolean, jint, jlong, jstring, JNI_TRUE, JNI_FALSE};
 
-use crate::{library, metadata, player, session};
+use crate::{library, metadata, offline, player, session};
 use crate::audio_sink;
 
 /// Helper: convert a JNI string to a Rust String.
@@ -85,6 +85,24 @@ pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_sessionIsConnected(
     _class: JClass,
 ) -> jboolean {
     if block_on(session::is_connected()) { JNI_TRUE } else { JNI_FALSE }
+}
+
+/// Create a session without connecting, so the player can play downloads
+/// while there is no network. A later sessionConnect connects this session.
+/// Returns null on success, or an error message string on failure.
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_sessionStartOffline(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    match block_on(session::start_offline()) {
+        Ok(()) => std::ptr::null_mut(),
+        Err(e) => {
+            let msg = format!("{e}");
+            log::error!("sessionStartOffline failed: {msg}");
+            string_to_jstring(&mut env, &msg)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -726,4 +744,96 @@ pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_metadataGetShowEpisodes(
             string_to_jstring(&mut env, &msg)
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Offline downloads
+// ---------------------------------------------------------------------------
+
+/// Parse a JSON array of URIs passed from Kotlin.
+fn parse_uri_list(json: &str) -> Vec<String> {
+    serde_json::from_str(json).unwrap_or_default()
+}
+
+/// Set the directory downloads are stored in. Must be called before the player is created.
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_setOfflineDir(
+    mut env: JNIEnv,
+    _class: JClass,
+    path: JString,
+) {
+    let dir = jstring_to_string(&mut env, &path);
+    offline::set_dir(&dir);
+}
+
+/// Download a track or episode for offline playback. Returns the TrackInfo JSON
+/// on success, or {"error": ..., "permanent": bool, "session_lost": bool}.
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_offlineDownload(
+    mut env: JNIEnv,
+    _class: JClass,
+    uri: JString,
+) -> jstring {
+    let uri = jstring_to_string(&mut env, &uri);
+    let json = match block_on(offline::download(&uri)) {
+        Ok(info) => serde_json::to_string(&info).unwrap_or_default(),
+        Err(e) => {
+            let (message, permanent, session_lost) = match e {
+                offline::DownloadError::Permanent(m) => (m, true, false),
+                offline::DownloadError::Transient(m) => (m, false, false),
+                offline::DownloadError::SessionLost => ("session lost".to_string(), false, true),
+            };
+            log::warn!("offlineDownload {uri} failed: {message}");
+            serde_json::json!({
+                "error": message,
+                "permanent": permanent,
+                "session_lost": session_lost,
+            })
+            .to_string()
+        }
+    };
+    string_to_jstring(&mut env, &json)
+}
+
+/// Delete the downloads for a JSON array of URIs.
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_offlineRemove(
+    mut env: JNIEnv,
+    _class: JClass,
+    uris_json: JString,
+) {
+    let json = jstring_to_string(&mut env, &uris_json);
+    offline::remove(&parse_uri_list(&json));
+}
+
+/// URIs of every downloaded track and episode, as a JSON array.
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_offlineList(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let json = serde_json::to_string(&offline::list()).unwrap_or_else(|_| "[]".into());
+    string_to_jstring(&mut env, &json)
+}
+
+/// Stored TrackInfo for whichever URIs in a JSON array are downloaded, as a JSON array.
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_offlineTrackInfos(
+    mut env: JNIEnv,
+    _class: JClass,
+    uris_json: JString,
+) -> jstring {
+    let uris = parse_uri_list(&jstring_to_string(&mut env, &uris_json));
+    let infos = offline::stored_track_infos(&uris);
+    let json = serde_json::to_string(&infos).unwrap_or_else(|_| "[]".into());
+    string_to_jstring(&mut env, &json)
+}
+
+/// Bytes used by downloads.
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_com_sidespot_bridge_NativeBridge_offlineStorageBytes(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jlong {
+    offline::storage_bytes() as jlong
 }

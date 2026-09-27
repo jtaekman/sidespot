@@ -18,6 +18,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.DownloadForOffline
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Podcasts
@@ -60,6 +62,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.sidespot.api.ApiResult
+import com.sidespot.offline.DownloadManager
 import com.sidespot.viewmodel.LibraryItem
 import com.sidespot.viewmodel.LibraryViewModel
 import kotlinx.coroutines.delay
@@ -75,9 +78,13 @@ fun LibraryScreen(
     onPodcastsClick: () -> Unit = {},
     onHistoryClick: () -> Unit = {},
     onSettingsClick: () -> Unit = {},
+    onDownloadsClick: () -> Unit = {},
+    onDownloadedCollectionClick: (uri: String) -> Unit = {},
+    isOffline: Boolean = false,
     viewModel: LibraryViewModel = viewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
+    val downloadsState by remember { DownloadManager.get() }.state.collectAsState()
     val context = LocalContext.current
     var selectedPlaylistUri by remember { mutableStateOf<String?>(null) }
     var feedbackText by remember { mutableStateOf<String?>(null) }
@@ -140,7 +147,35 @@ fun LibraryScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (state.isLoading && state.playlists.isEmpty()) {
+        if (isOffline) {
+            // Nothing but downloads can be browsed or played without a connection.
+            LazyColumn {
+                item(contentType = "offline_banner") {
+                    Row(
+                        modifier = Modifier.padding(bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CloudOff,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = "You're offline. Showing your downloads.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                }
+                downloadedCollectionItems(
+                    state = downloadsState,
+                    onClick = onDownloadedCollectionClick,
+                )
+            }
+        } else if (state.isLoading && state.playlists.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
@@ -264,6 +299,32 @@ fun LibraryScreen(
                         Spacer(modifier = Modifier.width(16.dp))
                         Text(
                             text = "Podcasts",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                }
+
+                // Downloads entry
+                item(contentType = "nav_entry") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusHighlight()
+                            .clickable(onClick = onDownloadsClick)
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DownloadForOffline,
+                            contentDescription = null,
+                            modifier = Modifier.size(24.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text(
+                            text = "Downloads",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onBackground,
                         )

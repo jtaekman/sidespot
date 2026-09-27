@@ -35,6 +35,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.sidespot.bridge.EpisodeSummary
+import com.sidespot.offline.DownloadManager
 import com.sidespot.viewmodel.LibraryViewModel
 import androidx.compose.foundation.focusGroup
 import androidx.compose.runtime.DisposableEffect
@@ -51,6 +52,8 @@ fun NewEpisodesScreen(
     onBack: () -> Unit,
 ) {
     val state by libraryViewModel.uiState.collectAsState()
+    var selectedEpisodeUri by remember { mutableStateOf<String?>(null) }
+    val downloads by remember { DownloadManager.get() }.state.collectAsState()
 
     LaunchedEffect(Unit) {
         libraryViewModel.loadNewEpisodes()
@@ -83,7 +86,7 @@ fun NewEpisodesScreen(
             .padding(horizontal = 16.dp)
             .focusProperties {
                 enter = {
-                    if (firstEpisodeFocusReady) firstEpisodeFocus
+                    if (firstEpisodeFocusReady && !isRestoringIndicatorFocus) firstEpisodeFocus
                     else FocusRequester.Default
                 }
             }
@@ -139,6 +142,7 @@ fun NewEpisodesScreen(
                         baseModifier.focusRequester(focusRequester) else baseModifier
                     NewEpisodeRow(
                         episode = episode,
+                        isDownloaded = episode.uri in downloads.downloaded,
                         modifier = rowModifier,
                         onClick = {
                             playerViewModel.cacheEpisodeMetadata(
@@ -155,7 +159,7 @@ fun NewEpisodesScreen(
                                 listOf(episode),
                                 episode.showName ?: "Podcast",
                             )
-                            playerViewModel.addToQueue(episode.uri)
+                            selectedEpisodeUri = episode.uri
                         },
                     )
                 }
@@ -179,12 +183,21 @@ fun NewEpisodesScreen(
             }
         }
     }
+
+    selectedEpisodeUri?.let { episodeUri ->
+        EpisodeActionsSheet(
+            episodeUri = episodeUri,
+            onAddToQueue = { playerViewModel.addToQueue(episodeUri) },
+            onDismiss = { selectedEpisodeUri = null },
+        )
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun NewEpisodeRow(
     episode: EpisodeSummary,
+    isDownloaded: Boolean,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -227,7 +240,8 @@ private fun NewEpisodeRow(
             )
         }
         Spacer(modifier = Modifier.height(4.dp))
-        Row {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (isDownloaded) DownloadedBadge()
             Text(
                 text = formatEpisodeDuration(episode.durationMs),
                 style = MaterialTheme.typography.labelSmall,

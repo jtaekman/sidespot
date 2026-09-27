@@ -92,7 +92,7 @@ fun SavedShowsScreen(
             .padding(horizontal = 16.dp)
             .focusProperties {
                 enter = {
-                    if (newEpisodesFocusReady) newEpisodesFocus
+                    if (newEpisodesFocusReady && !isRestoringIndicatorFocus) newEpisodesFocus
                     else FocusRequester.Default
                 }
             }

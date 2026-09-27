@@ -104,9 +104,6 @@ dependencies {
     // Image loading (for album art in later phases)
     implementation("io.coil-kt:coil-compose:2.7.0")
 
-    // Palette (dynamic theming from album art)
-    implementation("androidx.palette:palette:1.0.0")
-
     // Debug tools
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

@@ -3,6 +3,7 @@ package com.sidespot.settings
 import android.content.Context
 import android.content.SharedPreferences
 import com.sidespot.bridge.NativeBridge
+import com.sidespot.offline.DownloadManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,6 +20,7 @@ data class SettingsState(
     val autoplay: Boolean = false,
     val audioQuality: AudioQuality = AudioQuality.HIGH,
     val einkMode: Boolean = false,
+    val downloadOverCellular: Boolean = false,
 )
 
 class SettingsManager(context: Context) {
@@ -51,7 +53,15 @@ class SettingsManager(context: Context) {
             autoplay = prefs.getBoolean(KEY_AUTOPLAY, false),
             audioQuality = quality,
             einkMode = prefs.getBoolean(KEY_EINK_MODE, false),
+            downloadOverCellular = prefs.getBoolean(DownloadManager.KEY_DOWNLOAD_OVER_CELLULAR, false),
         )
+    }
+
+    /** Allow downloads on metered networks, and persist immediately. */
+    fun setDownloadOverCellular(enabled: Boolean) {
+        prefs.edit().putBoolean(DownloadManager.KEY_DOWNLOAD_OVER_CELLULAR, enabled).apply()
+        _state.value = _state.value.copy(downloadOverCellular = enabled)
+        DownloadManager.get().setAllowCellular(enabled)
     }
 
     /** Set e-ink mode and persist immediately. No player recreation needed. */

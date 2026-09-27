@@ -16,6 +16,8 @@ import com.sidespot.bridge.PlayerEvent
 import com.sidespot.bridge.TrackInfo
 import com.sidespot.history.PlayHistoryEntry
 import com.sidespot.history.PlayHistoryManager
+import com.sidespot.offline.ConnectionState
+import com.sidespot.offline.DownloadManager
 import com.sidespot.service.MediaCommandBridge
 import com.sidespot.service.PlaybackService
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +31,8 @@ import org.json.JSONArray
 
 data class PlayerUiState(
     val isConnected: Boolean = false,
+    /** Spotify couldn't be reached, so the player only plays downloads until it can. */
+    val isOffline: Boolean = false,
     val isPlaying: Boolean = false,
     val isLoading: Boolean = false,
     val trackUri: String = "",
@@ -72,6 +76,8 @@ class PlayerViewModel : ViewModel() {
     private var stoppedPositionMs: Long = 0L
     private var tokenProvider: (suspend () -> String?)? = null
     private var historyManager: PlayHistoryManager? = null
+    private var isGoingOnline = false
+    private val downloads = DownloadManager.get()
 
     /**
      * Initialize platform services. Called from MainActivity after ViewModel creation.
@@ -99,6 +105,8 @@ class PlayerViewModel : ViewModel() {
             }
         }
 
+        downloads.setSessionLostListener { recoverLostSession() }
+
         // Direct callback for media session commands from PlaybackService
         MediaCommandBridge.onCommand = { command, positionMs ->
             when (command) {
@@ -112,11 +120,16 @@ class PlayerViewModel : ViewModel() {
         }
     }
 
-    fun connect(accessToken: String, getToken: (suspend () -> String?)? = null) {
-        if (_uiState.value.isConnected) return
+    /**
+     * Connect to Spotify, or start in offline mode if that fails (or there is no
+     * token, e.g. it expired while offline) so downloads can still be played.
+     */
+    fun connect(accessToken: String?, getToken: (suspend () -> String?)? = null) {
+        if (_uiState.value.isConnected || _uiState.value.isOffline) return
         tokenProvider = getToken
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(connectionStatus = "Connecting...", error = null) }
+            downloads.setConnectionState(ConnectionState.CONNECTING)
 
             val callbackError = NativeBridge.registerAudioCallback(audioCallback)
             if (callbackError != null) {
@@ -130,21 +143,17 @@ class PlayerViewModel : ViewModel() {
                 return@launch
             }
 
-            val error = NativeBridge.sessionConnect(accessToken)
+            val error = if (accessToken != null) NativeBridge.sessionConnect(accessToken)
+                else "No access token"
             if (error != null) {
-                _uiState.update {
-                    it.copy(
-                        connectionStatus = "Connection failed",
-                        error = error,
-                        isConnected = false,
-                    )
-                }
+                startOffline(error)
                 return@launch
             }
 
             _uiState.update {
                 it.copy(connectionStatus = "Connected", isConnected = true, error = null)
             }
+            downloads.setConnectionState(ConnectionState.ONLINE)
 
             val playerError = NativeBridge.playerCreate()
             if (playerError != null) {
@@ -163,6 +172,53 @@ class PlayerViewModel : ViewModel() {
             startEventPolling()
         }
     }
+
+    /** Create the player on an unconnected session so it can play downloads. */
+    private fun startOffline(reason: String) {
+        android.util.Log.i("SidespotOffline", "starting offline: $reason")
+        val sessionError = NativeBridge.sessionStartOffline()
+        val playerError = sessionError ?: NativeBridge.playerCreate()
+        if (playerError != null) {
+            _uiState.update {
+                it.copy(connectionStatus = "Connection failed", error = reason, isConnected = false)
+            }
+            return
+        }
+        _uiState.update {
+            it.copy(
+                connectionStatus = "Offline",
+                isOffline = true,
+                error = null,
+                volume = NativeBridge.playerGetVolume(),
+            )
+        }
+        downloads.setConnectionState(ConnectionState.OFFLINE)
+        startEventPolling()
+    }
+
+    /**
+     * Try to leave offline mode. The offline session is connected in place, so
+     * whatever is playing carries on uninterrupted.
+     */
+    fun goOnline(accessToken: String?) {
+        if (!_uiState.value.isOffline || accessToken == null || isGoingOnline) return
+        isGoingOnline = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                if (NativeBridge.sessionConnect(accessToken) != null) return@launch
+                consecutiveErrors = 0
+                _uiState.update {
+                    it.copy(isOffline = false, isConnected = true, connectionStatus = "Ready")
+                }
+                downloads.setConnectionState(ConnectionState.ONLINE)
+            } finally {
+                isGoingOnline = false
+            }
+        }
+    }
+
+    /** Whether only downloaded tracks can be played right now. */
+    private fun isOffline(): Boolean = downloads.isOffline.value
 
     fun loadTrack(uri: String) {
         trackRetryCount = 0
@@ -212,13 +268,24 @@ class PlayerViewModel : ViewModel() {
     }
 
     fun loadTrackFromContext(
-        tracks: List<String>,
-        index: Int,
+        allTracks: List<String>,
+        allTracksIndex: Int,
         contextName: String = "",
         contextUri: String = "",
         contextImageUrl: String? = null,
         contextArtistName: String = "",
     ) {
+        // Offline, only downloads can play, so leave everything else out of the queue.
+        val tracks: List<String>
+        val index: Int
+        if (isOffline()) {
+            val selected = allTracks.getOrNull(allTracksIndex) ?: return
+            tracks = allTracks.filter { downloads.isDownloaded(it) }
+            index = tracks.indexOf(selected).takeIf { it >= 0 } ?: return
+        } else {
+            tracks = allTracks
+            index = allTracksIndex
+        }
         queueManager.loadContext(tracks, index, contextName, contextUri)
         val uri = tracks.getOrNull(index) ?: return
         loadTrack(uri)
@@ -690,6 +757,10 @@ class PlayerViewModel : ViewModel() {
                 }
             }
             is PlayerEvent.Timeout -> {
+                if (isOffline()) {
+                    skipToNextDownloaded()
+                    return
+                }
                 _uiState.update {
                     it.copy(
                         isPlaying = false,
@@ -700,6 +771,11 @@ class PlayerViewModel : ViewModel() {
             }
             is PlayerEvent.Error -> {
                 if (isReconnecting) return
+                // Offline there is nothing to retry or reconnect: move on to a download.
+                if (isOffline()) {
+                    skipToNextDownloaded()
+                    return
+                }
                 consecutiveErrors++
                 if (consecutiveErrors < 2) {
                     // Single error — retry the same track before skipping
@@ -718,6 +794,10 @@ class PlayerViewModel : ViewModel() {
                         val reconnected = attemptReconnect()
                         if (reconnected && currentUri.isNotEmpty()) {
                             loadTrack(currentUri)
+                        } else if (_uiState.value.isOffline) {
+                            // Fell back to offline mode: carry on with whatever is downloaded.
+                            if (downloads.isDownloaded(currentUri)) loadTrack(currentUri)
+                            else skipToNextDownloaded()
                         } else {
                             _uiState.update {
                                 it.copy(
@@ -733,6 +813,30 @@ class PlayerViewModel : ViewModel() {
                 }
             }
         }
+    }
+
+    /** Offline, skip past queued tracks that aren't downloaded to the next one that is. */
+    private fun skipToNextDownloaded() {
+        trackRetryCount = 0
+        consecutiveErrors = 0
+        val queue = queueManager.state.value
+        // Bounded, since repeat modes can make next() cycle forever.
+        repeat(queue.userQueue.size + queue.contextTracks.size + 1) {
+            val nextUri = queueManager.next() ?: return@repeat
+            if (downloads.isDownloaded(nextUri)) {
+                loadTrack(nextUri)
+                return
+            }
+        }
+        _uiState.update {
+            it.copy(
+                isPlaying = false,
+                isLoading = false,
+                error = "You're offline. Only downloaded tracks can be played.",
+            )
+        }
+        audioFocusManager?.abandonFocus()
+        appContext?.let { PlaybackService.stopService(it) }
     }
 
     private fun isAutoplayEnabled(): Boolean {
@@ -787,16 +891,50 @@ class PlayerViewModel : ViewModel() {
         isReconnecting = true
         try {
             NativeBridge.sessionDisconnect()
-            val token = tokenProvider?.invoke() ?: return false
-            val error = NativeBridge.sessionConnect(token)
-            if (error != null) return false
+            val token = tokenProvider?.invoke()
+            val error = if (token != null) NativeBridge.sessionConnect(token) else "No access token"
+            if (error != null) {
+                // Spotify is out of reach: keep the player going on downloads.
+                fallBackToOffline()
+                return false
+            }
             val playerError = NativeBridge.playerRecreate()
             if (playerError != null) return false
             consecutiveErrors = 0
+            downloads.setConnectionState(ConnectionState.ONLINE)
             return true
         } finally {
             isReconnecting = false
         }
+    }
+
+    /**
+     * Replace a session that shut down while nothing was playing from the network
+     * (downloads noticed first), then pick up where playback left off.
+     */
+    private fun recoverLostSession() {
+        if (isReconnecting || !_uiState.value.isConnected) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val uri = _uiState.value.trackUri
+            val positionMs = _positionMs.value.toInt()
+            val wasPlaying = _uiState.value.isPlaying
+            val reconnected = attemptReconnect()
+            // Recreating the player stopped it; offline, only a download can resume.
+            if (uri.isNotEmpty() && (reconnected || downloads.isDownloaded(uri))) {
+                NativeBridge.playerLoad(uri, wasPlaying, positionMs)
+            }
+        }
+    }
+
+    /** Replace a lost session with an offline one and recreate the player on it. */
+    private fun fallBackToOffline() {
+        if (NativeBridge.sessionStartOffline() != null) return
+        if (NativeBridge.playerRecreate() != null) return
+        consecutiveErrors = 0
+        _uiState.update {
+            it.copy(isConnected = false, isOffline = true, connectionStatus = "Offline")
+        }
+        downloads.setConnectionState(ConnectionState.OFFLINE)
     }
 
     override fun onCleared() {
@@ -806,6 +944,9 @@ class PlayerViewModel : ViewModel() {
         audioFocusManager?.abandonFocus()
         MediaCommandBridge.onCommand = null
         appContext?.let { PlaybackService.stopService(it) }
+        downloads.setSessionLostListener(null)
         NativeBridge.sessionDisconnect()
+        // Downloads pause until the next session connects.
+        downloads.setConnectionState(ConnectionState.CONNECTING)
     }
 }

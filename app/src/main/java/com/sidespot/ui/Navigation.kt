@@ -29,6 +29,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -36,10 +37,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -55,10 +60,12 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.sidespot.MainActivity
 import com.sidespot.auth.AuthManager
+import com.sidespot.offline.DownloadManager
 import com.sidespot.settings.SettingsManager
 import com.sidespot.viewmodel.LibraryViewModel
 import com.sidespot.viewmodel.PlayerViewModel
 import com.sidespot.viewmodel.SearchViewModel
+import kotlinx.coroutines.delay
 import java.net.URLDecoder
 import java.net.URLEncoder
 
@@ -75,6 +82,7 @@ object Routes {
     const val SAVED_SHOWS = "saved_shows"
     const val NEW_EPISODES = "new_episodes"
     const val HISTORY = "history"
+    const val DOWNLOADS = "downloads"
     const val SHOW_DETAIL = "show_detail/{uri}/{name}"
     const val ARTIST = "artist/{uri}"
 
@@ -96,6 +104,7 @@ private val bottomNavItems = listOf(
     BottomNavItem(Routes.SEARCH, Icons.Default.Search, "Search"),
 )
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun SidespotNavigation(
     playerViewModel: PlayerViewModel = viewModel(),
@@ -110,6 +119,9 @@ fun SidespotNavigation(
     val authState by authManager.state.collectAsState()
     val libraryViewModel: LibraryViewModel = viewModel()
     val searchViewModel: SearchViewModel = viewModel()
+    val downloadManager = remember { DownloadManager.get() }
+    val isOffline by downloadManager.isOffline.collectAsState()
+    val networkState by downloadManager.network.state.collectAsState()
 
     // Always use LIBRARY as start destination so the NavController's saved state
     // is consistent across Activity recreation.  Login redirect is handled by the
@@ -125,7 +137,6 @@ fun SidespotNavigation(
     val hideChrome = currentRoute == Routes.LOGIN
 
     val settingsState by settingsManager.state.collectAsState()
-    val albumColors = rememberAlbumColors(state.albumArtUrl)
     // Hide status bar while Now Playing overlay is visible
     val activity = LocalContext.current as? Activity
     DisposableEffect(showNowPlaying) {
@@ -166,17 +177,26 @@ fun SidespotNavigation(
                     it.route == navController.currentDestination?.route
                 }
                 val nextIdx = (currentIdx + 1) % bottomNavItems.size
-                navController.navigate(bottomNavItems[nextIdx].route) {
-                    popUpTo(navController.graph.findStartDestination().id) {
-                        inclusive = false
-                    }
-                    launchSingleTop = true
+                navController.navigateToTab(bottomNavItems[nextIdx].route)
+            }
+            // D-pad keypads: Left/Right past the edge of the screen move to the
+            // neighbouring tab (matching the bottom bar's layout); on other screens
+            // Left goes back.
+            mainActivity.onDpadEdgeReached = { toLeft ->
+                val route = navController.currentDestination?.route
+                val currentIdx = bottomNavItems.indexOfFirst { it.route == route }
+                if (currentIdx >= 0) {
+                    bottomNavItems.getOrNull(currentIdx + if (toLeft) -1 else 1)
+                        ?.let { navController.navigateToTab(it.route) }
+                } else if (toLeft && route != Routes.LOGIN) {
+                    mainActivity.onBackPressedDispatcher.onBackPressed()
                 }
             }
         }
         onDispose {
             mainActivity?.onNowPlayingToggleRequested = null
             mainActivity?.onTabCycleRequested = null
+            mainActivity?.onDpadEdgeReached = null
         }
     }
 
@@ -185,6 +205,18 @@ fun SidespotNavigation(
     DisposableEffect(mainActivity, showNowPlaying) {
         mainActivity?.isNowPlayingVisible = showNowPlaying
         onDispose { mainActivity?.isNowPlayingVisible = false }
+    }
+
+    // Now Playing takes D-pad focus while open on D-pad keypads.  When it closes,
+    // hand focus back to the row underneath that had it.
+    val view = LocalView.current
+    var nowPlayingWasShown by remember { mutableStateOf(false) }
+    LaunchedEffect(showNowPlaying) {
+        if (showNowPlaying) {
+            nowPlayingWasShown = true
+        } else if (nowPlayingWasShown) {
+            restoreIndicatorFocus(view)
+        }
     }
 
     LaunchedEffect(currentRoute) {
@@ -207,9 +239,18 @@ fun SidespotNavigation(
             }
             val token = authManager.getValidAccessToken()
             Log.i("SidespotAuth", "auto-connect: token=${if (token != null) "present" else "null"}")
-            if (token != null) {
-                playerViewModel.connect(token) { authManager.getValidAccessToken() }
-            }
+            // Without a token (e.g. it expired and can't be refreshed offline) this
+            // starts in offline mode, so downloads can still be played.
+            playerViewModel.connect(token) { authManager.getValidAccessToken() }
+        }
+    }
+
+    // While in offline mode, try to get back online whenever there is a network,
+    // retrying periodically in case Spotify itself was what couldn't be reached.
+    LaunchedEffect(state.isOffline, networkState.isOnline) {
+        while (state.isOffline && networkState.isOnline) {
+            playerViewModel.goOnline(authManager.getValidAccessToken())
+            delay(30_000)
         }
     }
 
@@ -254,17 +295,23 @@ fun SidespotNavigation(
         }
     }
 
-    DynamicSidespotTheme(albumColors = albumColors, einkMode = settingsState.einkMode) {
+    SidespotTheme(einkMode = settingsState.einkMode) {
         Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
+            modifier = Modifier
+                // Keep D-pad focus out of the screen hidden behind Now Playing.
+                .focusProperties {
+                    if (showNowPlaying) enter = { FocusRequester.Cancel }
+                }
+                .focusGroup(),
             containerColor = MaterialTheme.colorScheme.background,
             bottomBar = {
                 if (!hideChrome) {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         // Mini-player above bottom nav.  Gated on trackUri only (not
-                        // trackTitle) so it stays mounted across track changes and the
-                        // theme's colour tween is visible instead of an unmount/remount.
-                        if (state.isConnected && state.trackUri.isNotEmpty()) {
+                        // trackTitle) so it stays mounted across track changes instead
+                        // of an unmount/remount.
+                        if ((state.isConnected || state.isOffline) && state.trackUri.isNotEmpty()) {
                             MiniPlayer(
                                 trackTitle = state.trackTitle,
                                 artistName = state.artistName,
@@ -339,7 +386,23 @@ fun SidespotNavigation(
                             onSettingsClick = {
                                 navController.navigate(Routes.SETTINGS)
                             },
+                            onDownloadsClick = {
+                                navController.navigate(Routes.DOWNLOADS)
+                            },
+                            onDownloadedCollectionClick = { uri ->
+                                navController.navigate(Routes.trackList(uri))
+                            },
+                            isOffline = isOffline,
                             viewModel = libraryViewModel,
+                        )
+                    }
+
+                    composable(Routes.DOWNLOADS) {
+                        DownloadsScreen(
+                            onCollectionClick = { uri ->
+                                navController.navigate(Routes.trackList(uri))
+                            },
+                            onBack = { navController.popBackStack() },
                         )
                     }
 
@@ -519,12 +582,23 @@ fun SidespotNavigation(
             exit = fadeOut(),
         ) {
             BackHandler { showNowPlaying = false }
-            NowPlayingScreen(
-                viewModel = playerViewModel,
-                onBack = { showNowPlaying = false },
-            )
+            CompositionLocalProvider(LocalRemembersIndicatorFocus provides false) {
+                NowPlayingScreen(
+                    viewModel = playerViewModel,
+                    onBack = { showNowPlaying = false },
+                )
+            }
         }
         }
+    }
+}
+
+private fun NavHostController.navigateToTab(route: String) {
+    navigate(route) {
+        popUpTo(graph.findStartDestination().id) {
+            inclusive = false
+        }
+        launchSingleTop = true
     }
 }
 
@@ -543,17 +617,11 @@ private fun BottomNavBar(
             val selected = currentRoute == item.route
             NavigationBarItem(
                 // Not reachable by D-pad — pressing down at the end of a list must
-                // stay in the content.  The sundial's top-left button cycles tabs.
+                // stay in the content.  The sundial's top-left button cycles tabs;
+                // on a D-pad keypad Left/Right at the screen edge switch tabs.
                 modifier = Modifier.focusProperties { canFocus = false },
                 selected = selected,
-                onClick = {
-                    navController.navigate(item.route) {
-                        popUpTo(navController.graph.findStartDestination().id) {
-                            inclusive = false
-                        }
-                        launchSingleTop = true
-                    }
-                },
+                onClick = { navController.navigateToTab(item.route) },
                 icon = {
                     Icon(
                         imageVector = item.icon,

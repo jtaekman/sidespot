@@ -38,6 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.sidespot.api.ApiResult
 import com.sidespot.bridge.EpisodeSummary
+import com.sidespot.offline.DownloadManager
 import com.sidespot.viewmodel.LibraryViewModel
 import androidx.compose.foundation.focusGroup
 import androidx.compose.runtime.DisposableEffect
@@ -58,6 +59,8 @@ fun ShowDetailScreen(
 ) {
     val state by libraryViewModel.uiState.collectAsState()
     var saveShowFeedback by remember { mutableStateOf<String?>(null) }
+    var selectedEpisodeUri by remember { mutableStateOf<String?>(null) }
+    val downloads by remember { DownloadManager.get() }.state.collectAsState()
     val firstContentFocus = remember { FocusRequester() }
     var firstContentFocusReady by remember { mutableStateOf(false) }
     val isShowSaved = remember(state.shows, showUri) {
@@ -92,7 +95,7 @@ fun ShowDetailScreen(
             .padding(horizontal = 16.dp)
             .focusProperties {
                 enter = {
-                    if (firstContentFocusReady) firstContentFocus
+                    if (firstContentFocusReady && !isRestoringIndicatorFocus) firstContentFocus
                     else FocusRequester.Default
                 }
             }
@@ -171,6 +174,7 @@ fun ShowDetailScreen(
                     }
                     EpisodeRow(
                         episode = episode,
+                        isDownloaded = episode.uri in downloads.downloaded,
                         modifier = if (index == 0 && isShowSaved) Modifier.focusRequester(firstContentFocus) else Modifier,
                         onClick = {
                             playerViewModel.cacheEpisodeMetadata(state.episodes, showName)
@@ -182,12 +186,20 @@ fun ShowDetailScreen(
                         },
                         onLongClick = {
                             playerViewModel.cacheEpisodeMetadata(listOf(episode), showName)
-                            playerViewModel.addToQueue(episode.uri)
+                            selectedEpisodeUri = episode.uri
                         },
                     )
                 }
             }
         }
+    }
+
+    selectedEpisodeUri?.let { episodeUri ->
+        EpisodeActionsSheet(
+            episodeUri = episodeUri,
+            onAddToQueue = { playerViewModel.addToQueue(episodeUri) },
+            onDismiss = { selectedEpisodeUri = null },
+        )
     }
 }
 
@@ -195,6 +207,7 @@ fun ShowDetailScreen(
 @Composable
 private fun EpisodeRow(
     episode: EpisodeSummary,
+    isDownloaded: Boolean,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -227,7 +240,8 @@ private fun EpisodeRow(
             )
         }
         Spacer(modifier = Modifier.height(4.dp))
-        Row {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (isDownloaded) DownloadedBadge()
             Text(
                 text = formatEpisodeDuration(episode.durationMs),
                 style = MaterialTheme.typography.labelSmall,

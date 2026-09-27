@@ -1,10 +1,48 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path
-        android:fillColor="#121212"
-        android:pathData="M0,0h108v108H0z" />
+    <!-- Pink-to-red, like Apple Music -->
+    <path android:pathData="M0,0h108v108H0z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54"
+                android:startY="18"
+                android:endX="54"
+                android:endY="90"
+                android:startColor="#FFFF6D88"
+                android:endColor="#FFF3294A" />
+        </aapt:attr>
+    </path>
+    <!-- Darker towards the edges, for the puffy look of the Sidephone's own icons -->
+    <path android:pathData="M0,0h108v108H0z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="54"
+                android:centerY="52"
+                android:gradientRadius="54">
+                <item android:offset="0" android:color="#00000000" />
+                <item android:offset="0.6" android:color="#00000000" />
+                <item android:offset="1" android:color="#38000000" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Soft highlight along the top -->
+    <path android:pathData="M0,0h108v108H0z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="54"
+                android:centerY="14"
+                android:gradientRadius="46">
+                <item android:offset="0" android:color="#38FFFFFF" />
+                <item android:offset="1" android:color="#00FFFFFF" />
+            </gradient>
+        </aapt:attr>
+    </path>
 </vector>

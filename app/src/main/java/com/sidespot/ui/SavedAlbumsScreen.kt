@@ -90,7 +90,7 @@ fun SavedAlbumsScreen(
             .padding(horizontal = 16.dp)
             .focusProperties {
                 enter = {
-                    if (firstAlbumFocusReady) firstAlbumFocus
+                    if (firstAlbumFocusReady && !isRestoringIndicatorFocus) firstAlbumFocus
                     else FocusRequester.Default
                 }
             }

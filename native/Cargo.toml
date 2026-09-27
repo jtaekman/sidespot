@@ -30,6 +30,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"
 # HTTP types (re-exported by librespot-core)
 bytes = "1"
 hyper = "1.6"
+http-body-util = "0.1"
 
 # Serialization for JNI payloads
 serde = { version = "1", features = ["derive"] }
@@ -44,6 +45,10 @@ thiserror = "2"
 
 # Byte conversion (used by audio sink for PCM sample conversion)
 zerocopy = { version = "0.8", features = ["derive"] }
+
+[dev-dependencies]
+# Encrypts the fixture in the offline playback test the way Spotify's CDN files are
+librespot-audio = { path = "librespot-local/audio", default-features = false, features = ["rustls-tls-webpki-roots"] }
 
 [profile.release]
 opt-level = "s"       # Optimize for size

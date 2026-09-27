@@ -19,10 +19,14 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.DownloadDone
+import androidx.compose.material.icons.filled.Downloading
 import androidx.compose.material.icons.filled.LibraryAdd
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -33,6 +37,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -47,6 +52,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import android.view.InputDevice
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -57,6 +63,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.sidespot.api.ApiResult
 import com.sidespot.bridge.TrackInfo
+import com.sidespot.offline.DownloadManager
 import com.sidespot.viewmodel.LibraryViewModel
 import com.sidespot.viewmodel.PlayerViewModel
 import com.sidespot.viewmodel.TrackListViewModel
@@ -84,6 +91,48 @@ fun TrackListScreen(
     val isPlaylist = remember(uri) { uri.startsWith("spotify:playlist:") }
     val isPlaylistSaved = remember(libraryState.playlists, uri) {
         libraryState.playlists.any { it.uri == uri }
+    }
+
+    val downloadManager = remember { DownloadManager.get() }
+    val downloadsState by downloadManager.state.collectAsState()
+    val isOffline by downloadManager.isOffline.collectAsState()
+    val isEpisodeDownloads = uri == DownloadManager.EPISODES_URI
+    val canDownload = uri == DownloadManager.LIKED_SONGS_URI || isPlaylist || state.isAlbum
+    val downloadedCollection = downloadsState.collection(uri)
+    val downloadProgress = downloadedCollection?.let { downloadsState.progress(it) }
+    val isDownloading = downloadProgress != null && downloadProgress.first < downloadProgress.second
+    val downloadLabel = when {
+        downloadProgress == null -> "Download"
+        isDownloading -> "Downloading ${downloadProgress!!.first}/${downloadProgress.second}"
+        else -> "Downloaded"
+    }
+    val downloadIcon = when {
+        downloadProgress == null -> Icons.Default.Download
+        isDownloading -> Icons.Default.Downloading
+        else -> Icons.Default.DownloadDone
+    }
+    var showRemoveDownloadDialog by remember { mutableStateOf(false) }
+    val onDownloadClick = {
+        if (downloadedCollection == null) {
+            downloadManager.addCollection(
+                uri = uri,
+                name = state.name,
+                subtitle = when {
+                    state.isAlbum -> state.artistName
+                    isPlaylist -> "Playlist"
+                    else -> ""
+                },
+                imageUrl = state.albumArtUrl,
+                trackUris = state.trackUris,
+            )
+        } else {
+            showRemoveDownloadDialog = true
+        }
+    }
+    // Offline, only downloaded tracks can be played.
+    val playableUris = remember(state.trackUris, isOffline, downloadsState.downloaded) {
+        if (isOffline) state.trackUris.filter { it in downloadsState.downloaded }
+        else state.trackUris
     }
 
     LaunchedEffect(uri) {
@@ -260,7 +309,7 @@ fun TrackListScreen(
                         Button(
                             onClick = {
                                 playerViewModel.loadTrackFromContext(
-                                    state.trackUris, 0, state.name, contextUri = uri,
+                                    playableUris, 0, state.name, contextUri = uri,
                                     contextImageUrl = state.albumArtUrl,
                                     contextArtistName = state.tracks.firstOrNull()?.artistName ?: "",
                                 )
@@ -286,7 +335,7 @@ fun TrackListScreen(
                         Spacer(modifier = Modifier.height(4.dp))
                         Button(
                             onClick = {
-                                val shuffledTracks = state.trackUris.shuffled()
+                                val shuffledTracks = playableUris.shuffled()
                                 playerViewModel.loadTrackFromContext(
                                     shuffledTracks, 0, state.name, contextUri = uri,
                                     contextImageUrl = state.albumArtUrl,
@@ -310,7 +359,28 @@ fun TrackListScreen(
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("Shuffle")
                         }
-                        if (state.isAlbum && !isAlbumSaved) {
+                        if (canDownload) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Button(
+                                onClick = onDownloadClick,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.secondary,
+                                ),
+                                shape = RoundedCornerShape(20.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusDarken(),
+                            ) {
+                                Icon(
+                                    imageVector = downloadIcon,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(downloadLabel)
+                            }
+                        }
+                        if (state.isAlbum && !isAlbumSaved && !isOffline) {
                             Spacer(modifier = Modifier.height(4.dp))
                             Button(
                                 onClick = {
@@ -338,7 +408,7 @@ fun TrackListScreen(
                                 Text(saveAlbumFeedback ?: "Save Album")
                             }
                         }
-                        if (isPlaylist && !isPlaylistSaved) {
+                        if (isPlaylist && !isPlaylistSaved && !isOffline) {
                             Spacer(modifier = Modifier.height(4.dp))
                             Button(
                                 onClick = {
@@ -372,10 +442,33 @@ fun TrackListScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
+                            if (canDownload) {
+                                IconButton(
+                                    onClick = onDownloadClick,
+                                    modifier = Modifier.size(40.dp).focusCircle(),
+                                ) {
+                                    Icon(
+                                        imageVector = downloadIcon,
+                                        contentDescription = downloadLabel,
+                                        tint = if (downloadedCollection != null) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                    )
+                                }
+                                if (isDownloading) {
+                                    Text(
+                                        text = "${downloadProgress!!.first}/${downloadProgress.second}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
                             Spacer(modifier = Modifier.weight(1f))
                             FilledIconButton(
                                 onClick = {
-                                    val shuffledTracks = state.trackUris.shuffled()
+                                    val shuffledTracks = playableUris.shuffled()
                                     playerViewModel.loadTrackFromContext(
                                         shuffledTracks, 0, state.name,
                                     )
@@ -396,7 +489,7 @@ fun TrackListScreen(
                             Button(
                                 onClick = {
                                     playerViewModel.loadTrackFromContext(
-                                        state.trackUris, 0, state.name,
+                                        playableUris, 0, state.name,
                                     )
                                     onPlayStarted()
                                 },
@@ -414,7 +507,7 @@ fun TrackListScreen(
                                 Text("Play All")
                             }
                         }
-                        if (state.isAlbum && !isAlbumSaved) {
+                        if (state.isAlbum && !isAlbumSaved && !isOffline) {
                             Spacer(modifier = Modifier.height(4.dp))
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -444,7 +537,7 @@ fun TrackListScreen(
                                 }
                             }
                         }
-                        if (isPlaylist && !isPlaylistSaved) {
+                        if (isPlaylist && !isPlaylistSaved && !isOffline) {
                             Spacer(modifier = Modifier.height(4.dp))
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -481,10 +574,13 @@ fun TrackListScreen(
 
             // Track list
             itemsIndexed(state.tracks, key = { _, track -> track.uri }, contentType = { _, _ -> "track" }) { index, track ->
+                val isDownloaded = track.uri in downloadsState.downloaded
                 TrackRow(
                     index = index + 1,
                     track = track,
                     showAlbumArt = !state.isAlbum,
+                    isDownloaded = isDownloaded,
+                    enabled = isDownloaded || !isOffline,
                     modifier = if (index == state.tracks.lastIndex) {
                         Modifier.onFocusChanged { lastRowFocused = it.isFocused }
                     } else {
@@ -561,6 +657,30 @@ fun TrackListScreen(
             } else null,
             artists = selectedTrack?.artists.orEmpty(),
             onGoToArtist = onGoToArtist,
+            onRemoveDownload = if (isEpisodeDownloads) {
+                { downloadManager.removeEpisode(selectedTrackUri!!) }
+            } else null,
+        )
+    }
+
+    if (showRemoveDownloadDialog) {
+        AlertDialog(
+            onDismissRequest = { showRemoveDownloadDialog = false },
+            title = { Text("Remove download?") },
+            text = { Text("${state.name} won't be available offline any more.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    downloadManager.removeCollection(uri)
+                    showRemoveDownloadDialog = false
+                }) {
+                    Text("Remove")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRemoveDownloadDialog = false }) {
+                    Text("Cancel")
+                }
+            },
         )
     }
 }
@@ -588,6 +708,9 @@ internal fun TrackRow(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
+    isDownloaded: Boolean = false,
+    /** False for tracks that can't be played right now (offline and not downloaded). */
+    enabled: Boolean = true,
 ) {
     val context = LocalContext.current
     Row(
@@ -595,9 +718,10 @@ internal fun TrackRow(
             .fillMaxWidth()
             .focusHighlight(onEnterKey = onLongClick)
             .combinedClickable(
-                onClick = onClick,
+                onClick = { if (enabled) onClick() },
                 onLongClick = onLongClick,
             )
+            .alpha(if (enabled) 1f else 0.4f)
             .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -656,6 +780,8 @@ internal fun TrackRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+
+        if (isDownloaded) DownloadedBadge()
 
         // Duration
         Text(

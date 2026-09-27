@@ -90,7 +90,7 @@ fun SavedArtistsScreen(
             .padding(horizontal = 16.dp)
             .focusProperties {
                 enter = {
-                    if (firstArtistFocusReady) firstArtistFocus
+                    if (firstArtistFocusReady && !isRestoringIndicatorFocus) firstArtistFocus
                     else FocusRequester.Default
                 }
             }

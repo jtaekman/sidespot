@@ -5,12 +5,15 @@ import androidx.lifecycle.viewModelScope
 import com.sidespot.bridge.NativeBridge
 import com.sidespot.bridge.PlaylistInfo
 import com.sidespot.bridge.TrackInfo
+import com.sidespot.offline.DownloadManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -21,6 +24,8 @@ data class TrackListUiState(
     val trackUris: List<String> = emptyList(),
     val tracks: List<TrackInfo> = emptyList(),
     val albumArtUrl: String? = null,
+    /** The album's artists; empty for playlists. */
+    val artistName: String = "",
     val isAlbum: Boolean = false,
     val isLoading: Boolean = false,
     val hasMoreTracks: Boolean = false,
@@ -45,6 +50,8 @@ class TrackListViewModel : ViewModel() {
     private val loadedTracks = mutableListOf<TrackInfo>()
     private val pageMutex = Mutex()
 
+    private val downloads = DownloadManager.get()
+
     fun loadTrackList(uri: String) {
         if (uri == loadedUri) return
         loadedUri = uri
@@ -52,7 +59,20 @@ class TrackListViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isLoading = true, error = null) }
 
-            if (uri == "liked_songs") {
+            if (uri == DownloadManager.EPISODES_URI) {
+                showDownloaded(uri)
+            } else if (downloads.isOffline.value) {
+                if (downloads.state.value.collection(uri) != null) {
+                    showDownloaded(uri)
+                } else {
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            error = "You're offline. Download albums and playlists to play them without a connection.",
+                        )
+                    }
+                }
+            } else if (uri == DownloadManager.LIKED_SONGS_URI) {
                 loadLikedSongs()
             } else if (uri.startsWith("spotify:playlist:")) {
                 loadPlaylist(uri)
@@ -88,6 +108,7 @@ class TrackListViewModel : ViewModel() {
                 hasMoreTracks = playlist.trackUris.isNotEmpty(),
             )
         }
+        downloads.syncCollection(uri, playlist.name, playlist.trackUris)
 
         pageMutex.withLock { fetchNextPage() }
     }
@@ -129,10 +150,12 @@ class TrackListViewModel : ViewModel() {
                 trackUris = trackUris,
                 tracks = trackInfos,
                 albumArtUrl = album.albumArtUrl,
+                artistName = album.artistName,
                 isAlbum = true,
                 isLoading = false,
             )
         }
+        downloads.syncCollection(uri, album.name, trackUris)
     }
 
     private suspend fun loadLikedSongs() {
@@ -157,8 +180,41 @@ class TrackListViewModel : ViewModel() {
                 hasMoreTracks = playlist.trackUris.isNotEmpty(),
             )
         }
+        downloads.syncCollection(DownloadManager.LIKED_SONGS_URI, "Liked Songs", playlist.trackUris)
 
         pageMutex.withLock { fetchNextPage() }
+    }
+
+    /**
+     * Show a downloaded collection from what is stored on the device, following
+     * it as tracks finish downloading or are removed.
+     */
+    private suspend fun showDownloaded(uri: String) {
+        downloads.state
+            .map { state ->
+                state.collection(uri)?.trackUris.orEmpty().filter { it in state.downloaded }
+            }
+            .distinctUntilChanged()
+            .collect { loadDownloaded(uri) }
+    }
+
+    private fun loadDownloaded(uri: String) {
+        val collection = downloads.state.value.collection(uri)
+        val tracks = collection?.let { downloads.trackInfos(it.trackUris) }.orEmpty()
+        val isAlbum = uri.startsWith("spotify:album:")
+        _uiState.update {
+            it.copy(
+                name = collection?.name ?: "Podcast Episodes",
+                trackUris = tracks.map { track -> track.uri },
+                tracks = tracks,
+                // The art saved with the tracks is on the device; the album's own URL isn't.
+                albumArtUrl = if (isAlbum) tracks.firstOrNull()?.albumArtUrl else null,
+                artistName = if (isAlbum) collection?.subtitle.orEmpty() else "",
+                isAlbum = isAlbum,
+                isLoading = false,
+                hasMoreTracks = false,
+            )
+        }
     }
 
     /**
